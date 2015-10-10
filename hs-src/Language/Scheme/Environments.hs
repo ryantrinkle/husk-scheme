@@ -1,4 +1,4 @@
-
+{-# LANGUAGE FlexibleContexts #-}
 {- |
 Module      : Language.Scheme.Environments
 Copyright   : Justin Ethier
@@ -25,7 +25,7 @@ import qualified Data.Char
 import System.IO
 
 -- |Primitive functions that execute within the IO monad
-ioPrimitives :: [(String, [LispVal] -> IOThrowsError LispVal)]
+ioPrimitives :: (ReadRef r IO, PtrEq r) => [(String, [LispVal r] -> IOThrowsError r (LispVal r))]
 ioPrimitives = [("open-input-file", makePort openFile ReadMode ),
                 ("open-binary-input-file", makePort openBinaryFile ReadMode),
                 ("open-output-file", makePort openFile WriteMode),
@@ -158,21 +158,21 @@ ioPrimitives = [("open-input-file", makePort openFile ReadMode ),
                 ("gensym", gensym)]
 
 
-printEnv' :: [LispVal] -> IOThrowsError LispVal
+printEnv' :: ReadRef r IO => [LispVal r] -> IOThrowsError r (LispVal r)
 printEnv' [LispEnv env] = do
     result <- liftIO $ printEnv env
     return $ String result
 printEnv' [] = throwError $ NumArgs (Just 1) []
 printEnv' args = throwError $ TypeMismatch "env" $ List args
 
-exportsFromEnv' :: [LispVal] -> IOThrowsError LispVal
+exportsFromEnv' :: ReadRef r IO => [LispVal r] -> IOThrowsError r (LispVal r)
 exportsFromEnv' [LispEnv env] = do
     result <- liftIO $ exportsFromEnv env
     return $ List result
 exportsFromEnv' _ = return $ List []
 
 -- | Pure primitive functions
-primitives :: [(String, [LispVal] -> ThrowsError LispVal)]
+primitives :: [(String, [LispVal r] -> ThrowsError r (LispVal r))]
 primitives = [("+", numAdd),
               ("-", numSub),
               ("*", numMul),
@@ -279,7 +279,7 @@ primitives = [("+", numAdd),
               ("husk-interpreter?", isInterpreter)]
 
 -- |Custom function used internally in the test suite
-isInterpreter :: [LispVal] -> ThrowsError LispVal
+isInterpreter :: [LispVal r] -> ThrowsError r (LispVal r)
 isInterpreter [] = return $ Bool True
 isInterpreter _ = return $ Bool False
 

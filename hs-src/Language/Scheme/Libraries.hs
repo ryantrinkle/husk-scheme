@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 {- |
 Module      : Language.Scheme.Libraries
 Copyright   : Justin Ethier
@@ -20,12 +21,12 @@ module Language.Scheme.Libraries
 import Language.Scheme.Types
 import Language.Scheme.Variables
 import Control.Monad.Except
-import Data.IORef
 
 -- |Get the full path to a module file
 findModuleFile 
-    :: [LispVal]
-    -> IOThrowsError LispVal
+    :: (ReadRef r IO, PtrEq r)
+    => [LispVal r]
+    -> IOThrowsError r (LispVal r)
 findModuleFile [p@(Pointer _ _)] = recDerefPtrs p >>= box >>= findModuleFile
 findModuleFile [String file] = do
     -- Good enough now that load searches @lib@ if file not found
@@ -34,10 +35,11 @@ findModuleFile _ = return $ Bool False
 
 -- |Import definitions from one environment into another
 moduleImport 
-    :: Env IORef  -- ^ Environment to import into
-    -> Env IORef  -- ^ Environment to import from
-    -> [LispVal] -- ^ Identifiers to import
-    -> IOThrowsError LispVal
+    :: (ReadRef r IO, WriteRef r IO, NewRef r IO)
+    => Env r  -- ^ Environment to import into
+    -> Env r  -- ^ Environment to import from
+    -> [LispVal r] -- ^ Identifiers to import
+    -> IOThrowsError r (LispVal r)
 moduleImport to from (p@(Pointer _ _) : is) = do
   i <- derefPtr p
   moduleImport to from (i : is)
@@ -54,11 +56,12 @@ moduleImport _ _ err = do
 
 -- |Copy a binding from one env to another
 divertBinding
-    :: Env IORef  -- ^ Environment to import into
-    -> Env IORef  -- ^ Environment to import from
+    :: (ReadRef r IO, WriteRef r IO, NewRef r IO)
+    => Env r  -- ^ Environment to import into
+    -> Env r  -- ^ Environment to import from
     -> String -- ^ Name of the binding in @from@
     -> String -- ^ Name to use for the binding in @to@
-    -> IOThrowsError LispVal
+    -> IOThrowsError r (LispVal r)
 divertBinding to from nameOrig nameNew = do
   isMacroBound <- liftIO $ isNamespacedRecBound from macroNamespace nameOrig
   namespace <- liftIO $ if isMacroBound then return macroNamespace

@@ -1,4 +1,7 @@
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE ConstraintKinds #-}
 
 {- |
 Module      : Language.Scheme.Variables
@@ -102,19 +105,20 @@ getVarName :: Char -> String -> String
 getVarName namespace name = (namespace : ('_' : name))
 
 -- |Show the contents of an environment
-printEnv :: Env IORef   -- ^Environment
+printEnv :: ReadRef r IO
+         => Env r   -- ^Environment
          -> IO String   -- ^Contents of the env as a string
 printEnv env = do
-  binds <- liftIO $ readIORef $ bindings env
+  binds <- liftIO $ readRef $ bindings env
   l <- mapM showVar $ Data.Map.toList binds 
   return $ unlines l
  where 
   showVar (name, val) = do
-    v <- liftIO $ readIORef val
+    v <- liftIO $ readRef val
     return $ "[" ++ name ++ "]" ++ ": " ++ show v
 
 -- |Recursively print an environment to string
-recPrintEnv :: Env IORef -> IO String
+recPrintEnv :: ReadRef r IO => Env r -> IO String
 recPrintEnv env = do
   envStr <- liftIO $ printEnv env
 
@@ -125,7 +129,7 @@ recPrintEnv env = do
     Nothing -> return envStr
 
 -- |Recursively find all exports from the given environment
-recExportsFromEnv :: Env IORef -> IO [LispVal IORef]
+recExportsFromEnv :: ReadRef r IO => Env r -> IO [LispVal r]
 recExportsFromEnv env = do
   xs <- exportsFromEnv env
 
@@ -136,10 +140,11 @@ recExportsFromEnv env = do
     Nothing -> return xs
 
 -- |Return a list of symbols exported from an environment
-exportsFromEnv :: Env IORef 
-               -> IO [LispVal IORef]
+exportsFromEnv :: ReadRef r IO
+               => Env r 
+               -> IO [LispVal r]
 exportsFromEnv env = do
-  binds <- liftIO $ readIORef $ bindings env
+  binds <- liftIO $ readRef $ bindings env
   return $ getExports [] $ fst $ unzip $ Data.Map.toList binds 
  where 
   getExports acc (('m':'_':b) : bs) = getExports (Atom b:acc) bs
@@ -148,19 +153,20 @@ exportsFromEnv env = do
   getExports acc [] = acc
 
 -- |Create a deep copy of an environment
-copyEnv :: Env IORef      -- ^ Source environment
-        -> IO (Env IORef)   -- ^ A copy of the source environment
+copyEnv :: (ReadRef r IO, NewRef r IO)
+        => Env r      -- ^ Source environment
+        -> IO (Env r)   -- ^ A copy of the source environment
 copyEnv env = do
-  ptrs <- liftIO $ readIORef $ pointers env
-  ptrList <- newIORef ptrs
+  ptrs <- readRef $ pointers env
+  ptrList <- newRef ptrs
 
-  binds <- liftIO $ readIORef $ bindings env
+  binds <- liftIO $ readRef $ bindings env
   bindingListT <- mapM addBinding $ Data.Map.toList binds 
-  bindingList <- newIORef $ Data.Map.fromList bindingListT
+  bindingList <- newRef $ Data.Map.fromList bindingListT
   return $ Environment (parentEnv env) bindingList ptrList
  where addBinding (name, val) = do 
-         x <- liftIO $ readIORef val
-         ref <- newIORef x
+         x <- liftIO $ readRef val
+         ref <- newRef x
          return (name, ref)
 
 -- |Perform a deep copy of an environment's contents into
@@ -169,54 +175,57 @@ copyEnv env = do
 --  The destination environment is modified!
 --
 importEnv 
-  :: Env IORef -- ^ Destination environment
-  -> Env IORef -- ^ Source environment
-  -> IO (Env IORef)
+  :: (ReadRef r IO, WriteRef r IO)
+  => Env r -- ^ Destination environment
+  -> Env r -- ^ Source environment
+  -> IO (Env r)
 importEnv dEnv sEnv = do
-  sPtrs <- liftIO $ readIORef $ pointers sEnv
-  dPtrs <- liftIO $ readIORef $ pointers dEnv
-  writeIORef (pointers dEnv) $ Data.Map.union sPtrs dPtrs
+  sPtrs <- readRef $ pointers sEnv
+  dPtrs <- readRef $ pointers dEnv
+  writeRef (pointers dEnv) $ Data.Map.union sPtrs dPtrs
 
-  sBinds <- liftIO $ readIORef $ bindings sEnv
-  dBinds <- liftIO $ readIORef $ bindings dEnv
-  writeIORef (bindings dEnv)  $ Data.Map.union sBinds dBinds
+  sBinds <- readRef $ bindings sEnv
+  dBinds <- readRef $ bindings dEnv
+  writeRef (bindings dEnv)  $ Data.Map.union sBinds dBinds
 
   case parentEnv sEnv of
     Just ps -> importEnv dEnv ps 
     Nothing -> return dEnv 
 
 -- |Extend given environment by binding a series of values to a new environment.
-extendEnv :: Env IORef -- ^ Environment 
-          -> [((Char, String), LispVal IORef)] -- ^ Extensions to the environment
-          -> IO (Env IORef) -- ^ Extended environment
+extendEnv :: (NewRef r IO)
+          => Env r -- ^ Environment 
+          -> [((Char, String), LispVal r)] -- ^ Extensions to the environment
+          -> IO (Env r) -- ^ Extended environment
 extendEnv envRef abindings = do 
-  bindinglistT <- (mapM addBinding abindings) -- >>= newIORef
-  bindinglist <- newIORef $ Data.Map.fromList bindinglistT
-  nullPointers <- newIORef $ Data.Map.fromList []
+  bindinglistT <- (mapM addBinding abindings) -- >>= newRef
+  bindinglist <- newRef $ Data.Map.fromList bindinglistT
+  nullPointers <- newRef $ Data.Map.fromList []
   return $ Environment (Just envRef) bindinglist nullPointers
- where addBinding ((namespace, name), val) = do ref <- newIORef val
+ where addBinding ((namespace, name), val) = do ref <- newRef val
                                                 return (getVarName namespace name, ref)
 
 -- |Find the top-most environment
-topmostEnv :: Env IORef -> IO (Env IORef)
+topmostEnv :: Env r -> IO (Env r)
 topmostEnv envRef = do
     case parentEnv envRef of
         Just p -> topmostEnv p
         Nothing -> return envRef
 
 -- |Create a null environment with the given environment as its parent.
-nullEnvWithParent :: Env IORef -> IO (Env IORef) 
+nullEnvWithParent :: NewRef r IO => Env r -> IO (Env r) 
 nullEnvWithParent p = do
   Environment _ binds ptrs <- nullEnv
   return $ Environment (Just p) binds ptrs
 
 -- |Recursively search environments to find one that contains the given variable.
 findNamespacedEnv 
-    :: Env IORef      -- ^Environment to begin the search; 
+    :: ReadRef r IO
+    => Env r      -- ^Environment to begin the search; 
                 --  parent env's will be searched as well.
     -> Char     -- ^Namespace
     -> String   -- ^Variable
-    -> IO (Maybe (Env IORef)) -- ^Environment, or Nothing if there was no match.
+    -> IO (Maybe (Env r)) -- ^Environment, or Nothing if there was no match.
 findNamespacedEnv envRef namespace var = do
   found <- liftIO $ isNamespacedBound envRef namespace var
   if found
@@ -226,31 +235,35 @@ findNamespacedEnv envRef namespace var = do
                Nothing -> return Nothing
 
 -- |Determine if a variable is bound in the default namespace
-isBound :: Env IORef      -- ^ Environment
+isBound :: ReadRef r IO
+        => Env r      -- ^ Environment
         -> String   -- ^ Variable
         -> IO Bool  -- ^ True if the variable is bound
 isBound envRef = isNamespacedBound envRef varNamespace
 
 -- |Determine if a variable is bound in the default namespace, 
 --  in this environment or one of its parents.
-isRecBound :: Env IORef      -- ^ Environment
+isRecBound :: ReadRef r IO
+           => Env r      -- ^ Environment
            -> String   -- ^ Variable
            -> IO Bool  -- ^ True if the variable is bound
 isRecBound envRef = isNamespacedRecBound envRef varNamespace
 
 -- |Determine if a variable is bound in a given namespace
 isNamespacedBound 
-    :: Env IORef      -- ^ Environment
+    :: ReadRef r IO
+    => Env r      -- ^ Environment
     -> Char     -- ^ Namespace
     -> String   -- ^ Variable
     -> IO Bool  -- ^ True if the variable is bound
 isNamespacedBound envRef namespace var = 
-    readIORef (bindings envRef) >>= return . Data.Map.member (getVarName namespace var)
+    readRef (bindings envRef) >>= return . Data.Map.member (getVarName namespace var)
 
 -- |Determine if a variable is bound in a given namespace
 --  or a parent of the given environment.
 isNamespacedRecBound 
-    :: Env IORef      -- ^ Environment
+    :: ReadRef r IO
+    => Env r      -- ^ Environment
     -> Char     -- ^ Namespace
     -> String   -- ^ Variable
     -> IO Bool  -- ^ True if the variable is bound
@@ -261,23 +274,26 @@ isNamespacedRecBound envRef namespace var = do
     Nothing -> return False
 
 -- |Retrieve the value of a variable defined in the default namespace
-getVar :: Env IORef       -- ^ Environment
+getVar :: ReadRef r IO
+       => Env r       -- ^ Environment
        -> String    -- ^ Variable
-       -> IOThrowsError IORef (LispVal IORef) -- ^ Contents of the variable
+       -> IOThrowsError r (LispVal r) -- ^ Contents of the variable
 getVar envRef = getNamespacedVar envRef varNamespace
 
 -- |Retrieve the value of a variable defined in the default namespace,
 --  or Nothing if it is not defined
-getVar' :: Env IORef       -- ^ Environment
+getVar' :: ReadRef r IO
+        => Env r       -- ^ Environment
         -> String    -- ^ Variable
-        -> IOThrowsError IORef (Maybe (LispVal IORef)) -- ^ Contents of the variable
+        -> IOThrowsError r (Maybe (LispVal r)) -- ^ Contents of the variable
 getVar' envRef = getNamespacedVar' envRef varNamespace
 
 -- |Retrieve an ioRef defined in a given namespace
-getNamespacedRef :: Env IORef     -- ^ Environment
+getNamespacedRef :: ReadRef r IO
+                 => Env r     -- ^ Environment
                  -> Char    -- ^ Namespace
                  -> String  -- ^ Variable
-                 -> IOThrowsError IORef (IORef (LispVal IORef))
+                 -> IOThrowsError r (r (LispVal r))
 getNamespacedRef envRef
                  namespace
                  var = do
@@ -287,10 +303,11 @@ getNamespacedRef envRef
     Nothing -> (throwError $ UnboundVar "Getting an unbound variable" var)
 
 -- |Retrieve the value of a variable defined in a given namespace
-getNamespacedVar :: Env IORef     -- ^ Environment
+getNamespacedVar :: ReadRef r IO
+                 => Env r     -- ^ Environment
                  -> Char    -- ^ Namespace
                  -> String  -- ^ Variable
-                 -> IOThrowsError IORef (LispVal IORef) -- ^ Contents of the variable
+                 -> IOThrowsError r (LispVal r) -- ^ Contents of the variable
 getNamespacedVar envRef
                  namespace
                  var = do
@@ -301,25 +318,27 @@ getNamespacedVar envRef
 
 -- |Retrieve the value of a variable defined in a given namespace,
 --  or Nothing if it is not defined
-getNamespacedVar' :: Env IORef     -- ^ Environment
-                 -> Char    -- ^ Namespace
-                 -> String  -- ^ Variable
-                 -> IOThrowsError IORef (Maybe (LispVal IORef)) -- ^ Contents of the variable, if found
+getNamespacedVar' :: ReadRef r IO
+                  => Env r     -- ^ Environment
+                  -> Char    -- ^ Namespace
+                  -> String  -- ^ Variable
+                  -> IOThrowsError r (Maybe (LispVal r)) -- ^ Contents of the variable, if found
 getNamespacedVar' envRef
                  namespace
                  var = do 
-    getNamespacedObj' envRef namespace var readIORef
+    getNamespacedObj' envRef namespace var readRef
 
-getNamespacedObj' :: Env IORef     -- ^ Environment
-                 -> Char    -- ^ Namespace
-                 -> String  -- ^ Variable
-                 -> (IORef (LispVal IORef) -> IO a)
-                 -> IOThrowsError IORef (Maybe a) -- ^ Contents of the variable, if found
+getNamespacedObj' :: ReadRef r IO
+                  => Env r     -- ^ Environment
+                  -> Char    -- ^ Namespace
+                  -> String  -- ^ Variable
+                  -> (r (LispVal r) -> IO a)
+                  -> IOThrowsError r (Maybe a) -- ^ Contents of the variable, if found
 getNamespacedObj' envRef
                  namespace
                  var 
                  unpackFnc = do 
-    binds <- liftIO $ readIORef $ bindings envRef
+    binds <- liftIO $ readRef $ bindings envRef
     case Data.Map.lookup (getVarName namespace var) binds of
       (Just a) -> do
           v <- liftIO $ unpackFnc a
@@ -330,19 +349,21 @@ getNamespacedObj' envRef
 
 -- |Set a variable in the default namespace
 setVar
-    :: Env IORef      -- ^ Environment
+    :: (ReadRef r IO, WriteRef r IO, NewRef r IO)
+    => Env r      -- ^ Environment
     -> String   -- ^ Variable
-    -> LispVal IORef  -- ^ Value
-    -> IOThrowsError IORef (LispVal IORef) -- ^ Value
+    -> LispVal r  -- ^ Value
+    -> IOThrowsError r (LispVal r) -- ^ Value
 setVar envRef = setNamespacedVar envRef varNamespace
 
 -- |Set a variable in a given namespace
 setNamespacedVar 
-    :: Env IORef      -- ^ Environment 
+    :: (ReadRef r IO, WriteRef r IO, NewRef r IO)
+    => Env r      -- ^ Environment 
     -> Char     -- ^ Namespace
     -> String   -- ^ Variable
-    -> LispVal IORef  -- ^ Value
-    -> IOThrowsError IORef (LispVal IORef)   -- ^ Value
+    -> LispVal r  -- ^ Value
+    -> IOThrowsError r (LispVal r)   -- ^ Value
 setNamespacedVar envRef
                  namespace
                  var value = do 
@@ -372,11 +393,12 @@ setNamespacedVar envRef
 --  Note this function still binds reverse pointers
 --  for purposes of book-keeping.
 _setNamespacedVar 
-    :: Env IORef      -- ^ Environment 
+    :: (ReadRef r IO, WriteRef r IO, NewRef r IO)
+    => Env r      -- ^ Environment 
     -> Char     -- ^ Namespace
     -> String   -- ^ Variable
-    -> LispVal IORef  -- ^ Value
-    -> IOThrowsError IORef (LispVal IORef)   -- ^ Value
+    -> LispVal r  -- ^ Value
+    -> IOThrowsError r (LispVal r)   -- ^ Value
 _setNamespacedVar envRef
                  namespace
                  var value = do 
@@ -387,18 +409,19 @@ _setNamespacedVar envRef
 -- |Do the actual /set/ operation, with NO pointer operations.
 --  Only call this if you know what you are doing!
 _setNamespacedVarDirect
-    :: Env IORef      -- ^ Environment 
+    :: (ReadRef r IO, WriteRef r IO)
+    => Env r      -- ^ Environment 
     -> Char     -- ^ Namespace
     -> String   -- ^ Variable
-    -> LispVal IORef  -- ^ Value
-    -> IOThrowsError IORef (LispVal IORef)   -- ^ Value
+    -> LispVal r  -- ^ Value
+    -> IOThrowsError r (LispVal r)   -- ^ Value
 _setNamespacedVarDirect envRef
                  namespace
                  var valueToStore = do 
-  env <- liftIO $ readIORef $ bindings envRef
+  env <- liftIO $ readRef $ bindings envRef
   case Data.Map.lookup (getVarName namespace var) env of
     (Just a) -> do
-      liftIO $ writeIORef a valueToStore
+      liftIO $ writeRef a valueToStore
       return valueToStore
     Nothing -> case parentEnv envRef of
       (Just par) -> _setNamespacedVarDirect par namespace var valueToStore
@@ -406,12 +429,12 @@ _setNamespacedVarDirect envRef
 
 -- |This helper function is used to keep pointers in sync when
 --  a variable is bound to a different value.
-updatePointers :: Env IORef -> Char -> String -> IOThrowsError IORef (LispVal IORef)
+updatePointers :: forall r. (ReadRef r IO, WriteRef r IO, NewRef r IO) => Env r -> Char -> String -> IOThrowsError r (LispVal r)
 updatePointers envRef namespace var = do
-  ptrs <- liftIO $ readIORef $ pointers envRef
+  ptrs <- liftIO $ readRef $ pointers envRef
   case Data.Map.lookup (getVarName namespace var) ptrs of
     (Just valIORef) -> do
-      val <- liftIO $ readIORef valIORef
+      val <- liftIO $ readRef valIORef
       case val of 
         -- If var has any pointers, then we need to 
         -- assign the first pointer to the old value
@@ -421,7 +444,7 @@ updatePointers envRef namespace var = do
         -- This is the first pointer to (the old) var
         (Pointer pVar pEnv : ps) -> do
           -- Since var is now fresh, reset its pointers list
-          liftIO $ writeIORef valIORef []
+          liftIO $ writeRef valIORef []
 
           -- The first pointer now becomes the old var,
           -- so its pointers list should become ps
@@ -443,19 +466,19 @@ updatePointers envRef namespace var = do
  where
   -- |Move the given pointers (ptr) to the list of
   --  pointers for variable (var)
-  movePointers :: Env IORef -> Char -> String -> [LispVal IORef] -> IOThrowsError IORef (LispVal IORef)
+  movePointers :: Env r -> Char -> String -> [LispVal r] -> IOThrowsError r (LispVal r)
   movePointers envRef' namespace' var' ptrs = do
-    env <- liftIO $ readIORef $ pointers envRef'
+    env <- liftIO $ readRef $ pointers envRef'
     case Data.Map.lookup (getVarName namespace' var') env of
       Just ps' -> do
         -- Append ptrs to existing list of pointers to var
-        ps <- liftIO $ readIORef ps'
-        liftIO $ writeIORef ps' $ ps ++ ptrs
+        ps <- liftIO $ readRef ps'
+        liftIO $ writeRef ps' $ ps ++ ptrs
         return $ Nil ""
       Nothing -> do
         -- var does not have any pointers; create new list
-        valueRef <- liftIO $ newIORef ptrs
-        liftIO $ writeIORef (pointers envRef') (Data.Map.insert (getVarName namespace var') valueRef env)
+        valueRef <- liftIO $ newRef ptrs
+        liftIO $ writeRef (pointers envRef') (Data.Map.insert (getVarName namespace var') valueRef env)
         return $ Nil ""
 
   -- |Update each pointer's source to point to pVar
@@ -466,7 +489,7 @@ updatePointers envRef namespace var = do
   pointToNewVar _ _ _ _ = throwError $ InternalError "pointToNewVar"
 
 -- |A wrapper for updateNamespaceObject that uses the variable namespace.
-updateObject :: Env IORef -> String -> LispVal IORef -> IOThrowsError IORef (LispVal IORef)
+updateObject :: (ReadRef r IO, WriteRef r IO, NewRef r IO) => Env r -> String -> LispVal r -> IOThrowsError r (LispVal r)
 updateObject env = 
   updateNamespacedObject env varNamespace
 
@@ -480,11 +503,12 @@ updateObject env =
 --  update any associated pointers. So it should probably only be
 --  used internally by husk, unless you really know what you are
 --  doing!
-updateNamespacedObject :: Env IORef                   -- ^ Environment
+updateNamespacedObject :: (ReadRef r IO, WriteRef r IO, NewRef r IO)
+                       => Env r                   -- ^ Environment
                        -> Char                  -- ^ Namespace
                        -> String                -- ^ Variable
-                       -> LispVal IORef               -- ^ Value
-                       -> IOThrowsError IORef (LispVal IORef) -- ^ Value
+                       -> LispVal r               -- ^ Value
+                       -> IOThrowsError r (LispVal r) -- ^ Value
 updateNamespacedObject env namespace var value = do
   varContents <- getNamespacedVar env namespace var
   obj <- findPointerTo varContents
@@ -495,19 +519,21 @@ updateNamespacedObject env namespace var value = do
 
 -- |Bind a variable in the default namespace
 defineVar
-    :: Env IORef      -- ^ Environment
+    :: (ReadRef r IO, WriteRef r IO, NewRef r IO)
+    => Env r      -- ^ Environment
     -> String   -- ^ Variable
-    -> LispVal IORef  -- ^ Value
-    -> IOThrowsError IORef (LispVal IORef) -- ^ Value
+    -> LispVal r  -- ^ Value
+    -> IOThrowsError r (LispVal r) -- ^ Value
 defineVar envRef = defineNamespacedVar envRef varNamespace 
 
 -- |Bind a variable in the given namespace
 defineNamespacedVar
-    :: Env IORef      -- ^ Environment 
+    :: (ReadRef r IO, WriteRef r IO, NewRef r IO)
+    => Env r      -- ^ Environment 
     -> Char     -- ^ Namespace
     -> String   -- ^ Variable
-    -> LispVal IORef  -- ^ Value
-    -> IOThrowsError IORef (LispVal IORef)   -- ^ Value
+    -> LispVal r  -- ^ Value
+    -> IOThrowsError r (LispVal r)   -- ^ Value
 defineNamespacedVar envRef
                     namespace
                     var value = do
@@ -530,16 +556,16 @@ defineNamespacedVar envRef
       valueToStore <- getValueToStore namespace var envRef value
       liftIO $ do
         -- Write new value binding
-        valueRef <- newIORef valueToStore
-        env <- readIORef $ bindings envRef
-        writeIORef (bindings envRef) (Data.Map.insert (getVarName namespace var) valueRef env)
+        valueRef <- newRef valueToStore
+        env <- readRef $ bindings envRef
+        writeRef (bindings envRef) (Data.Map.insert (getVarName namespace var) valueRef env)
         return valueToStore
 
 -- |An internal helper function to get the value to save to an env
 --  based on the value passed to the define/set function. Normally this
 --  is straightforward, but there is book-keeping involved if a
 --  pointer is passed, depending on if the pointer resolves to an object.
-getValueToStore :: Char -> String -> Env IORef -> LispVal IORef -> IOThrowsError IORef (LispVal IORef)
+getValueToStore :: (ReadRef r IO, WriteRef r IO, NewRef r IO) => Char -> String -> Env r -> LispVal r -> IOThrowsError r (LispVal r)
 getValueToStore namespace var env (Pointer p pEnv) = do
   addReversePointer namespace p pEnv namespace var env
 getValueToStore _ _ _ value = return value
@@ -548,16 +574,16 @@ getValueToStore _ _ _ value = return value
 --  to be assigned to. If that variable is an object then we setup a reverse lookup
 --  for future book-keeping. Otherwise, we just look it up and return it directly, 
 --  no booking-keeping required.
-addReversePointer :: Char -> String -> Env IORef -> Char -> String -> Env IORef -> IOThrowsError IORef (LispVal IORef)
+addReversePointer :: (ReadRef r IO, WriteRef r IO, NewRef r IO) => Char -> String -> Env r -> Char -> String -> Env r -> IOThrowsError r (LispVal r)
 addReversePointer namespace var envRef ptrNamespace ptrVar ptrEnvRef = do
-   env <- liftIO $ readIORef $ bindings envRef
+   env <- liftIO $ readRef $ bindings envRef
    case Data.Map.lookup (getVarName namespace var) env of
      (Just a) -> do
-       v <- liftIO $ readIORef a
+       v <- liftIO $ readRef a
        if isObject v
           then do
             -- Store a reverse pointer for book keeping
-            ptrs <- liftIO $ readIORef $ pointers envRef
+            ptrs <- liftIO $ readRef $ pointers envRef
             
             -- Lookup ptr for var
             case Data.Map.lookup (getVarName namespace var) ptrs of
@@ -565,14 +591,14 @@ addReversePointer namespace var envRef ptrNamespace ptrVar ptrEnvRef = do
               -- FUTURE: make sure ptr is not already there, 
               --         before adding it to the list again?
               (Just valueRef) -> liftIO $ do
-                value <- readIORef valueRef
-                writeIORef valueRef (value ++ [Pointer ptrVar ptrEnvRef])
+                value <- readRef valueRef
+                writeRef valueRef (value ++ [Pointer ptrVar ptrEnvRef])
                 return $ Pointer var envRef 
 
               -- No mapping, add the first reverse pointer
               Nothing -> liftIO $ do
-                valueRef <- newIORef [Pointer ptrVar ptrEnvRef]
-                writeIORef (pointers envRef) (Data.Map.insert (getVarName namespace var) valueRef ptrs)
+                valueRef <- newRef [Pointer ptrVar ptrEnvRef]
+                writeRef (pointers envRef) (Data.Map.insert (getVarName namespace var) valueRef ptrs)
                 return $ Pointer var envRef -- Return non-reverse ptr to caller
           else return v -- Not an object, return value directly
      Nothing -> case parentEnv envRef of
@@ -580,7 +606,7 @@ addReversePointer namespace var envRef ptrNamespace ptrVar ptrEnvRef = do
        Nothing -> throwError $ UnboundVar "Getting an unbound variable: " var
 
 -- |Return a value with a pointer dereferenced, if necessary
-derefPtr :: LispVal IORef -> IOThrowsError IORef (LispVal IORef)
+derefPtr :: ReadRef r IO => LispVal r -> IOThrowsError r (LispVal r)
 -- Try dereferencing again if a ptr is found
 --
 -- Not sure if this is the best solution; it would be 
@@ -596,7 +622,7 @@ derefPtr v = return v
 
 -- -- |Return the given list of values, but if any of the
 -- --  original values is a pointer it will be dereferenced
--- derefPtrs :: [LispVal IORef] -> IOThrowsError IORef (LispVal IORef)
+-- derefPtrs :: [LispVal r] -> IOThrowsError r (LispVal r)
 -- derefPtrs lvs = mapM (liftThrows $ derefPtr) lvs
 
 -- |Recursively process the given data structure, dereferencing
@@ -604,11 +630,11 @@ derefPtr v = return v
 -- 
 --  This could potentially be expensive on large data structures 
 --  since it must walk the entire object.
-recDerefPtrs :: LispVal IORef -> IOThrowsError IORef (LispVal IORef)
+recDerefPtrs :: (ReadRef r IO, PtrEq r) => LispVal r -> IOThrowsError r (LispVal r)
 recDerefPtrs = safeRecDerefPtrs []
 
 -- |Attempt to dereference pointers safely, without being caught in a cycle
-safeRecDerefPtrs :: [LispVal IORef] -> LispVal IORef -> IOThrowsError IORef (LispVal IORef)
+safeRecDerefPtrs :: (ReadRef r IO, PtrEq r) => [LispVal r] -> LispVal r -> IOThrowsError r (LispVal r)
 #ifdef UsePointers
 safeRecDerefPtrs ps (List l) = do
     result <- mapM (safeRecDerefPtrs ps) l
@@ -634,7 +660,7 @@ safeRecDerefPtrs ps ptr@(Pointer p env) = do
             safeRecDerefPtrs (ptr : ps) result 
 safeRecDerefPtrs _ v = return v
 
-containsPtr :: [LispVal IORef] -> LispVal IORef -> Bool
+containsPtr :: PtrEq r => [LispVal r] -> LispVal r -> Bool
 containsPtr ((Pointer pa ea):ps) p@(Pointer pb eb) = do
     let found = (pa == pb) && ((bindings ea) == (bindings eb))
     found || containsPtr ps p
@@ -642,15 +668,15 @@ containsPtr _ _ = False
 
 -- |A helper to recursively dereference all pointers and
 --  pass results to a function
-recDerefToFnc :: ([LispVal IORef] -> ThrowsError IORef (LispVal IORef)) -> [LispVal IORef] 
-            -> IOThrowsError IORef (LispVal IORef)
+recDerefToFnc :: (ReadRef r IO, PtrEq r) => ([LispVal r] -> ThrowsError r (LispVal r)) -> [LispVal r] 
+            -> IOThrowsError r (LispVal r)
 recDerefToFnc fnc lvs = do
     List result <- recDerefPtrs $ List lvs 
     liftThrows $ fnc result
 
 -- |A predicate to determine if the given lisp value 
 --  is an /object/ that can be pointed to.
-isObject :: LispVal IORef -> Bool
+isObject :: LispVal r -> Bool
 isObject (List _) = True
 isObject (DottedList _ _) = True
 isObject (String _) = True
@@ -663,7 +689,7 @@ isObject _ = False
 -- |Same as dereferencing a pointer, except we want the
 --  last pointer to an object (if there is one) instead
 --  of the object itself
-findPointerTo :: LispVal IORef -> IOThrowsError IORef (LispVal IORef)
+findPointerTo :: ReadRef r IO => LispVal r -> IOThrowsError r (LispVal r)
 findPointerTo ptr@(Pointer p env) = do
     result <- getVar env p
     case result of

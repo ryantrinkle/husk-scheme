@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 {- |
 Module      : Language.Scheme.Macro.ExplicitRenaming
 Copyright   : Justin Ethier
@@ -28,18 +29,18 @@ import Language.Scheme.Types
 import Language.Scheme.Variables
 import Language.Scheme.Primitives (_gensym)
 import Control.Monad.Except
-import Data.IORef
 -- import Debug.Trace
 
 -- |Handle an explicit renaming macro
-explicitRenamingTransform :: 
-       Env IORef -- ^Environment where macro was used
-    -> Env IORef -- ^Temporary environment to store renamed variables
-    -> Env IORef -- ^Environment containing any variables renamed by syntax-rules
-    -> LispVal -- ^Form to transform
-    -> LispVal -- ^Macro transformer
-    -> (LispVal -> LispVal -> [LispVal] -> IOThrowsError LispVal) -- ^Eval func
-    -> IOThrowsError LispVal
+explicitRenamingTransform ::
+       (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r)
+    => Env r -- ^Environment where macro was used
+    -> Env r -- ^Temporary environment to store renamed variables
+    -> Env r -- ^Environment containing any variables renamed by syntax-rules
+    -> LispVal r -- ^Form to transform
+    -> LispVal r -- ^Macro transformer
+    -> (LispVal r -> LispVal r -> [LispVal r] -> IOThrowsError r (LispVal r)) -- ^Eval func
+    -> IOThrowsError r (LispVal r)
 explicitRenamingTransform useEnv renameEnv srRenameEnv lisp 
                           transformer@(Func _ _ _ defEnv) apply = do
   let continuation = makeNullContinuation useEnv
@@ -73,7 +74,7 @@ explicitRenamingTransform _ _ _ _ _ _ =
 -- the sense of eqv?. It is an error if the renaming
 -- procedure is called after the transformation
 -- procedure has returned.
-exRename :: Env IORef -> Env IORef -> Env IORef -> Env IORef -> [LispVal] -> IOThrowsError LispVal
+exRename :: (ReadRef r IO, WriteRef r IO, NewRef r IO) => Env r -> Env r -> Env r -> Env r -> [LispVal r] -> IOThrowsError r (LispVal r)
 exRename useEnv _ srRenameEnv defEnv [Atom a] = do
   isSynRulesRenamed <- liftIO $ isRecBound srRenameEnv a
 
@@ -109,11 +110,11 @@ exRename useEnv _ srRenameEnv defEnv [Atom a] = do
 exRename _ _ _ _ form = throwError $ Default $ "Unable to rename: " ++ show form
 
 -- |The explicit renaming /compare/ function
-exCompare :: Env IORef        -- ^ Environment of use
-          -> Env IORef        -- ^ Environment with renames
-          -> Env IORef        -- ^ Environment of definition
-          -> [LispVal]  -- ^ Values to compare
-          -> IOThrowsError LispVal
+exCompare :: Env r        -- ^ Environment of use
+          -> Env r        -- ^ Environment with renames
+          -> Env r        -- ^ Environment of definition
+          -> [LispVal r]  -- ^ Values to compare
+          -> IOThrowsError r (LispVal r)
 exCompare _ _ _ [a, b] = do
   return $ Bool $ eqVal a b
 exCompare _ _ _ form = throwError $ 

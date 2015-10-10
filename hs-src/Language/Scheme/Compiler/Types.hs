@@ -43,7 +43,6 @@ import qualified Data.Complex as DC
 import qualified Data.List
 import qualified Data.Map
 import qualified Data.Ratio as DR
-import Data.IORef
 
 -- |A type to store options passed to compile.
 --  Eventually all of this might be able to be 
@@ -72,11 +71,11 @@ defaultCompileOptions :: String -> CompOpts
 defaultCompileOptions thisFunc = CompileOptions thisFunc False False Nothing
 
 -- |Options passed to the compiler library module
-data CompLibOpts = CompileLibraryOptions {
-    compBlock :: String -> Maybe String -> Env IORef 
-              -> [HaskAST] -> [LispVal] -> IOThrowsError [HaskAST],
-    compLisp :: Env IORef -> String -> String -> Maybe String 
-              -> IOThrowsError [HaskAST]
+data CompLibOpts r = CompileLibraryOptions {
+    compBlock :: String -> Maybe String -> Env r 
+              -> [HaskAST] -> [LispVal r] -> IOThrowsError r [HaskAST],
+    compLisp :: Env r -> String -> String -> Maybe String 
+              -> IOThrowsError r [HaskAST]
     }
 
 -- |Runtime reference to module data structure
@@ -124,7 +123,7 @@ data HaskAST = AstAssignM String HaskAST
 showValAST :: HaskAST -> String
 showValAST (AstAssignM var val) = "  " ++ var ++ " <- " ++ show val
 showValAST (AstFunction name args code) = do
-  let typeSig = "\n" ++ name ++ " :: Env IORef -> LispVal -> LispVal -> Maybe [LispVal] -> IOThrowsError LispVal "
+  let typeSig = "\n" ++ name ++ " :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r) "
   let fheader = "\n" ++ name ++ args ++ " = do "
   let fbody = unwords . map (\x -> '\n' : x ) $ map showValAST code
 #ifdef UseDebug
@@ -159,7 +158,7 @@ joinL
 joinL ls sep = Data.List.intercalate sep ls
 
 -- |Convert abstract syntax tree to a string
-ast2Str :: LispVal -> String 
+ast2Str :: LispVal r -> String 
 ast2Str (String s) = "String " ++ show s
 ast2Str (Char c) = "Char " ++ show c
 ast2Str (Atom a) = "Atom " ++ show a
@@ -186,7 +185,7 @@ ast2Str (DottedList ls l) =
 ast2Str l = show l -- Error?
 
 -- |Convert a list of abstract syntax trees to a list of strings
-asts2Str :: [LispVal] -> String
+asts2Str :: [LispVal r] -> String
 asts2Str ls = do
     "[" ++ (joinL (map ast2Str ls) ",") ++ "]"
 

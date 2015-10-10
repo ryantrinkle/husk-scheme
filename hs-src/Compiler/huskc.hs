@@ -1,3 +1,5 @@
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE FlexibleContexts #-}
 {- |
 Module      : Main
 Copyright   : Justin Ethier
@@ -136,7 +138,7 @@ showVersion _ = do
 -- |High level code to compile the given file
 process :: String -> String -> String -> Bool -> Bool -> String -> String -> Bool -> IO ()
 process inFile outHaskell outExec libs dynamic extraArgs langrev debugOpt = do
-  env <- case langrev of
+  env :: Env IORef <- case langrev of
             "7" -> Language.Scheme.Core.r7rsEnv'
             _ -> Language.Scheme.Core.r5rsEnv'
   stdlib <- getDataFileName "lib/stdlib.scm"
@@ -152,9 +154,9 @@ process inFile outHaskell outExec libs dynamic extraArgs langrev debugOpt = do
    _ -> compileHaskellFile outHaskell outExec dynamic extraArgs
 
 -- |Compile a scheme file to haskell
-compileSchemeFile :: Env IORef -> Maybe String -> String -> String -> String -> String -> Bool -> IOThrowsError LispVal
+compileSchemeFile :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => Env r -> Maybe String -> String -> String -> String -> String -> Bool -> IOThrowsError r (LispVal r)
 compileSchemeFile env stdlib srfi55 filename outHaskell langrev _ = do
-  let conv :: LispVal -> String
+  let conv :: LispVal r -> String
       conv (String s) = s
       conv l = show l
       compileLibraries = case stdlib of
@@ -206,7 +208,7 @@ compileSchemeFile env stdlib srfi55 filename outHaskell langrev _ = do
      else throwError $ Default "Empty file" --putStrLn "empty file"
 
 -- |Compile the intermediate haskell file using GHC
-compileHaskellFile :: String -> String -> Bool -> String -> IO() --ThrowsError LispVal
+compileHaskellFile :: String -> String -> Bool -> String -> IO() --ThrowsError r (LispVal r)
 compileHaskellFile hsInFile objOutFile dynamic extraArgs = do
   let ghc = "ghc" -- Need to make configurable??
       dynamicArg = if dynamic then "-dynamic" else ""

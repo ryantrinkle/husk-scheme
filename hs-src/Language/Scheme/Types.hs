@@ -2,6 +2,9 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE UndecidableInstances #-}
 {- |
 Module      : Language.Scheme.Types
 Copyright   : Justin Ethier
@@ -96,6 +99,10 @@ module Language.Scheme.Types
     , makeNormalHFunc
     , makeHVarargs
     , validateFuncParams
+    , ReadRef (..)
+    , WriteRef (..)
+    , NewRef (..)
+    , PtrEq
     )
  where
 import Control.Monad.Except
@@ -111,6 +118,7 @@ import qualified Data.Map
 import Data.Ratio
 import System.IO
 import Text.ParserCombinators.Parsec hiding (spaces)
+import Data.Map (Map)
 
 -- Environment management
 
@@ -121,7 +129,9 @@ data Env r = Environment {
         pointers :: (r (Data.Map.Map String (r [LispVal r])))
     }
 
-instance Eq (Env IORef) where
+type PtrEq r = (Eq (r (Map String (r (LispVal r)))), Eq (r (Map String (r [LispVal r]))))
+
+instance PtrEq r => Eq (Env r) where
     (Environment _ xb xpts) == (Environment _ yb ypts) = 
       (xb == yb) && (xpts == ypts)
 
