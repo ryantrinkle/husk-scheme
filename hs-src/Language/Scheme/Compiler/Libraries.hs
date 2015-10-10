@@ -22,13 +22,14 @@ import qualified Language.Scheme.Core as LSC
 import Language.Scheme.Primitives
 import Language.Scheme.Types
 import Language.Scheme.Variables
-import Control.Monad.Error
+import Control.Monad.Except
+import Data.IORef
 
 -- |Import all given modules and generate code for them
 importAll 
-    :: Env 
+    :: Env IORef 
     -- ^ Compilation environment
-    -> Env 
+    -> Env IORef 
     -- ^ Compilation meta environment, containing code from modules.scm
     -> [LispVal]
     -- ^ Modules to import
@@ -54,12 +55,12 @@ importAll env metaEnv (m : ms) lopts
     return $ c ++ rest ++ stub
 importAll _ _ [] _ _ = return []
 
-_importAll :: Env
-           -> Env
+_importAll :: Env IORef
+           -> Env IORef
            -> LispVal
            -> CompLibOpts
            -> CompOpts
-           -> ErrorT LispError IO [HaskAST]
+           -> ExceptT LispError IO [HaskAST]
 _importAll env metaEnv m lopts copts = do
     -- Resolve import
     resolved <- LSC.evalLisp metaEnv $ 
@@ -72,13 +73,13 @@ _importAll env metaEnv m lopts copts = do
         err -> throwError $ TypeMismatch "module/import" err
 
 -- |Import a single module
-importModule :: Env
-             -> Env
+importModule :: Env IORef
+             -> Env IORef
              -> LispVal
              -> [LispVal]
              -> CompLibOpts
              -> CompOpts
-             -> ErrorT LispError IO [HaskAST]
+             -> ExceptT LispError IO [HaskAST]
 importModule env metaEnv moduleName imports lopts 
              (CompileOptions thisFunc _ _ lastFunc) = do
     Atom symImport <- _gensym "importFnc"
@@ -140,7 +141,7 @@ importModule env metaEnv moduleName imports lopts
 
 -- | Load module into memory and generate compiled code
 loadModule
-    :: Env 
+    :: Env IORef 
     -- ^ Compilation meta environment, containing code from modules.scm
     -> LispVal
     -- ^ Name of the module to load
@@ -204,13 +205,13 @@ loadModule metaEnv name lopts copts@(CompileOptions {}) = do
 
 -- |Compile the given module, using metadata loaded into memory.
 --  This code is based off of eval-module from the meta language.
-compileModule :: Env
-              -> Env
+compileModule :: Env IORef
+              -> Env IORef
               -> LispVal
               -> LispVal
               -> CompLibOpts
               -> CompOpts
-              -> ErrorT LispError IO [HaskAST]
+              -> ExceptT LispError IO [HaskAST]
 compileModule env metaEnv name _mod lopts 
               (CompileOptions thisFunc _ _ lastFunc) = do
     -- TODO: set mod meta-data to avoid cyclic references
@@ -258,12 +259,12 @@ createFunctionStub thisFunc nextFunc = do
 
 -- |Compile sub-modules. That is, modules that are imported by
 --  another module in the (define-library) definition
-cmpSubMod :: Env
-          -> Env
+cmpSubMod :: Env IORef
+          -> Env IORef
           -> LispVal
           -> CompLibOpts
           -> CompOpts
-          -> ErrorT LispError IO [HaskAST]
+          -> ExceptT LispError IO [HaskAST]
 cmpSubMod env metaEnv (List ((List (Atom "import-immutable" : modules)) : ls)) 
     lopts copts = do
     -- Punt on this for now, although the meta-lang does the same thing
@@ -287,13 +288,13 @@ cmpSubMod _ _ _ _ (CompileOptions thisFunc _ _ lastFunc) =
     return [createFunctionStub thisFunc lastFunc]
 
 -- |Compile module directives (expressions) in a module definition
-cmpModExpr :: Env
-           -> Env
+cmpModExpr :: Env IORef
+           -> Env IORef
            -> LispVal
            -> LispVal
            -> CompLibOpts
            -> CompOpts
-           -> ErrorT LispError IO [HaskAST]
+           -> ExceptT LispError IO [HaskAST]
 cmpModExpr env metaEnv name (List ((List (Atom "include" : files)) : ls)) 
     lopts@(CompileLibraryOptions _ compileLisp)
     (CompileOptions thisFunc _ _ lastFunc) = do
@@ -350,10 +351,10 @@ includeAll :: forall t t1 t2 t3.
               -> t3
               -> [t2]
               -> (t3
-                  -> t2 -> String -> Maybe String -> ErrorT LispError IO [HaskAST])
+                  -> t2 -> String -> Maybe String -> ExceptT LispError IO [HaskAST])
               -> t1
               -> CompOpts
-              -> ErrorT LispError IO [HaskAST]
+              -> ExceptT LispError IO [HaskAST]
 includeAll _ dir [file] include _ --lopts
           (CompileOptions thisFunc _ _ lastFunc) = do
     include dir file thisFunc lastFunc
@@ -370,7 +371,7 @@ includeAll env dir (f : fs) include lopts
 includeAll _ _ [] _ _ _ = return []
 
 -- |Like evalLisp, but preserve pointers in the output
-eval :: Env -> LispVal -> IOThrowsError LispVal
+eval :: Env IORef -> LispVal -> IOThrowsError LispVal
 eval env lisp = do
   LSC.meval env (makeNullContinuation env) lisp
 

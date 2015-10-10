@@ -27,14 +27,15 @@ module Language.Scheme.Macro.ExplicitRenaming
 import Language.Scheme.Types
 import Language.Scheme.Variables
 import Language.Scheme.Primitives (_gensym)
-import Control.Monad.Error
+import Control.Monad.Except
+import Data.IORef
 -- import Debug.Trace
 
 -- |Handle an explicit renaming macro
 explicitRenamingTransform :: 
-       Env -- ^Environment where macro was used
-    -> Env -- ^Temporary environment to store renamed variables
-    -> Env -- ^Environment containing any variables renamed by syntax-rules
+       Env IORef -- ^Environment where macro was used
+    -> Env IORef -- ^Temporary environment to store renamed variables
+    -> Env IORef -- ^Environment containing any variables renamed by syntax-rules
     -> LispVal -- ^Form to transform
     -> LispVal -- ^Macro transformer
     -> (LispVal -> LispVal -> [LispVal] -> IOThrowsError LispVal) -- ^Eval func
@@ -72,7 +73,7 @@ explicitRenamingTransform _ _ _ _ _ _ =
 -- the sense of eqv?. It is an error if the renaming
 -- procedure is called after the transformation
 -- procedure has returned.
-exRename :: Env -> Env -> Env -> Env -> [LispVal] -> IOThrowsError LispVal
+exRename :: Env IORef -> Env IORef -> Env IORef -> Env IORef -> [LispVal] -> IOThrowsError LispVal
 exRename useEnv _ srRenameEnv defEnv [Atom a] = do
   isSynRulesRenamed <- liftIO $ isRecBound srRenameEnv a
 
@@ -108,9 +109,9 @@ exRename useEnv _ srRenameEnv defEnv [Atom a] = do
 exRename _ _ _ _ form = throwError $ Default $ "Unable to rename: " ++ show form
 
 -- |The explicit renaming /compare/ function
-exCompare :: Env        -- ^ Environment of use
-          -> Env        -- ^ Environment with renames
-          -> Env        -- ^ Environment of definition
+exCompare :: Env IORef        -- ^ Environment of use
+          -> Env IORef        -- ^ Environment with renames
+          -> Env IORef        -- ^ Environment of definition
           -> [LispVal]  -- ^ Values to compare
           -> IOThrowsError LispVal
 exCompare _ _ _ [a, b] = do

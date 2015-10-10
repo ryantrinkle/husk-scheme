@@ -43,6 +43,7 @@ import qualified Data.Complex as DC
 import qualified Data.List
 import qualified Data.Map
 import qualified Data.Ratio as DR
+import Data.IORef
 
 -- |A type to store options passed to compile.
 --  Eventually all of this might be able to be 
@@ -72,9 +73,9 @@ defaultCompileOptions thisFunc = CompileOptions thisFunc False False Nothing
 
 -- |Options passed to the compiler library module
 data CompLibOpts = CompileLibraryOptions {
-    compBlock :: String -> Maybe String -> Env 
+    compBlock :: String -> Maybe String -> Env IORef 
               -> [HaskAST] -> [LispVal] -> IOThrowsError [HaskAST],
-    compLisp :: Env -> String -> String -> Maybe String 
+    compLisp :: Env IORef -> String -> String -> Maybe String 
               -> IOThrowsError [HaskAST]
     }
 
@@ -123,7 +124,7 @@ data HaskAST = AstAssignM String HaskAST
 showValAST :: HaskAST -> String
 showValAST (AstAssignM var val) = "  " ++ var ++ " <- " ++ show val
 showValAST (AstFunction name args code) = do
-  let typeSig = "\n" ++ name ++ " :: Env -> LispVal -> LispVal -> Maybe [LispVal] -> IOThrowsError LispVal "
+  let typeSig = "\n" ++ name ++ " :: Env IORef -> LispVal -> LispVal -> Maybe [LispVal] -> IOThrowsError LispVal "
   let fheader = "\n" ++ name ++ args ++ " = do "
   let fbody = unwords . map (\x -> '\n' : x ) $ map showValAST code
 #ifdef UseDebug

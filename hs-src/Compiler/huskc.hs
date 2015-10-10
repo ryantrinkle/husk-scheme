@@ -24,6 +24,7 @@ import System.Environment
 import System.Exit (ExitCode (..), exitSuccess, exitWith)
 import System.IO
 import System.Process (system)
+import Data.IORef
 
 main :: IO ()
 main = do 
@@ -151,7 +152,7 @@ process inFile outHaskell outExec libs dynamic extraArgs langrev debugOpt = do
    _ -> compileHaskellFile outHaskell outExec dynamic extraArgs
 
 -- |Compile a scheme file to haskell
-compileSchemeFile :: Env -> Maybe String -> String -> String -> String -> String -> Bool -> IOThrowsError LispVal
+compileSchemeFile :: Env IORef -> Maybe String -> String -> String -> String -> String -> Bool -> IOThrowsError LispVal
 compileSchemeFile env stdlib srfi55 filename outHaskell langrev _ = do
   let conv :: LispVal -> String
       conv (String s) = s

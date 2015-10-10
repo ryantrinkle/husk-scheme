@@ -19,7 +19,8 @@ module Language.Scheme.Libraries
     ) where
 import Language.Scheme.Types
 import Language.Scheme.Variables
-import Control.Monad.Error
+import Control.Monad.Except
+import Data.IORef
 
 -- |Get the full path to a module file
 findModuleFile 
@@ -33,8 +34,8 @@ findModuleFile _ = return $ Bool False
 
 -- |Import definitions from one environment into another
 moduleImport 
-    :: Env  -- ^ Environment to import into
-    -> Env  -- ^ Environment to import from
+    :: Env IORef  -- ^ Environment to import into
+    -> Env IORef  -- ^ Environment to import from
     -> [LispVal] -- ^ Identifiers to import
     -> IOThrowsError LispVal
 moduleImport to from (p@(Pointer _ _) : is) = do
@@ -53,8 +54,8 @@ moduleImport _ _ err = do
 
 -- |Copy a binding from one env to another
 divertBinding
-    :: Env  -- ^ Environment to import into
-    -> Env  -- ^ Environment to import from
+    :: Env IORef  -- ^ Environment to import into
+    -> Env IORef  -- ^ Environment to import from
     -> String -- ^ Name of the binding in @from@
     -> String -- ^ Name to use for the binding in @to@
     -> IOThrowsError LispVal

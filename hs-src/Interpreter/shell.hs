@@ -26,6 +26,7 @@ import qualified System.Console.Haskeline.Completion as HLC
 import System.Environment
 import System.Exit (exitSuccess)
 import System.IO
+import Data.IORef
 
 main :: IO ()
 main = do 
@@ -96,12 +97,12 @@ showHelp _ = do
 flushStr :: String -> IO ()
 flushStr str = putStr str >> hFlush stdout
 
-getRuntimeEnv :: String -> IO Env
+getRuntimeEnv :: String -> IO (Env IORef)
 getRuntimeEnv "7" = LSC.r7rsEnv
 getRuntimeEnv _ = LSC.r5rsEnv
 
 -- |Execute a single scheme file from the command line
-runOne :: IO Env -> [String] -> Bool -> IO ()
+runOne :: IO (Env IORef) -> [String] -> Bool -> IO ()
 runOne initEnv args interactive = do
   env <- initEnv >>= flip LSV.extendEnv
                           [((LSV.varNamespace, "args"),
@@ -125,13 +126,13 @@ runOne initEnv args interactive = do
     runRepl env)
 
 -- |Start the REPL (interactive interpreter)
-runRepl :: Env -> IO ()
+runRepl :: Env IORef -> IO ()
 runRepl env' = do
     let settings = HL.Settings (completeScheme env') Nothing True
     HL.runInputT settings (loop env')
     where
         -- Main REPL loop
-        loop :: Env -> HL.InputT IO ()
+        loop :: Env IORef -> HL.InputT IO ()
         loop env = do
             minput <- HL.getInputLine "huski> "
             case minput of
@@ -167,7 +168,7 @@ runRepl env' = do
           cOpen > cClose
 
 -- |Auto-complete using scheme symbols
-completeScheme :: Env -> (String, String) 
+completeScheme :: Env IORef -> (String, String) 
                -> IO (String, [HLC.Completion])
 -- Right after a ')' it seems more useful to autocomplete next closed parenthesis
 completeScheme _ (lnL@(')':_), _) = do
