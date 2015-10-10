@@ -29,6 +29,7 @@ module Language.Scheme.Core
     -- * Core data
     , nullEnvWithImport
     , primitiveBindings
+    , purePrimitiveBindings
     , r5rsEnv
     , r5rsEnv'
     , r7rsEnv
