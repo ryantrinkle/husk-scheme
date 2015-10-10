@@ -1069,6 +1069,13 @@ primitiveBindings = nullEnv >>=
   where domakeFunc constructor (var, func) = 
             ((varNamespace, var), constructor func)
 
+purePrimitiveBindings :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => m (Env m r)
+purePrimitiveBindings = nullEnv >>= 
+    flip extendEnv  ( map (domakeFunc EvalFunc) pureEvalFunctions
+                   ++ map (domakeFunc PrimitiveFunc) primitives)
+  where domakeFunc constructor (var, func) = 
+            ((varNamespace, var), constructor func)
+
 --baseBindings :: m (Env m r)
 --baseBindings = nullEnv >>= 
 --    (flip extendEnv $ map (domakeFunc EvalFunc) evalFunctions)
@@ -1209,6 +1216,7 @@ evalfuncCallCC :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef 
 evalfuncCallWValues :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 evalfuncMakeEnv :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 evalfuncNullEnv :: forall m r. (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
+evalfuncPureNullEnv :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 evalfuncUseParentEnv :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 evalfuncExit :: forall m r. (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 evalfuncInteractionEnv :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
@@ -1309,6 +1317,12 @@ evalfuncNullEnv [cont@(Continuation {contClosure = env}), Number _] = do
     continueEval env cont (LispEnv nilEnv) Nothing
 evalfuncNullEnv (_ : args) = throwError $ NumArgs (Just 1) args -- Skip over continuation argument
 evalfuncNullEnv _ = throwError $ NumArgs (Just 1) []
+
+evalfuncPureNullEnv [cont@(Continuation {contClosure = env}), Number _] = do
+    nilEnv <- lift purePrimitiveBindings
+    continueEval env cont (LispEnv nilEnv) Nothing
+evalfuncPureNullEnv (_ : args) = throwError $ NumArgs (Just 1) args -- Skip over continuation argument
+evalfuncPureNullEnv _ = throwError $ NumArgs (Just 1) []
 
 evalfuncInteractionEnv (cont@(Continuation {contClosure = env}) : _) = do
     continueEval env cont (LispEnv env) Nothing
@@ -1429,33 +1443,37 @@ evalfuncExitSuccess _ = do
   _ <- liftIO System.Exit.exitSuccess
   return $ Nil ""
 
-{- Primitive functions that extend the core evaluator -}
-evalFunctions :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [(String, [LispVal m r] -> ExceptT (LispError m r) m (LispVal m r))]
-evalFunctions =  [  ("apply", evalfuncApply)
-                  , ("call-with-current-continuation", evalfuncCallCC)
-                  , ("call-with-values", evalfuncCallWValues)
-                  , ("dynamic-wind", evalfuncDynamicWind)
-                  , ("exit", evalfuncExit)
-                  , ("eval", evalfuncEval)
-                  , ("load", evalfuncLoad)
-                  , ("null-environment", evalfuncNullEnv)
-                  , ("current-environment", evalfuncInteractionEnv)
-                  , ("interaction-environment", evalfuncInteractionEnv)
-                  , ("make-environment", evalfuncMakeEnv)
+pureEvalFunctions :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [(String, [LispVal m r] -> ExceptT (LispError m r) m (LispVal m r))]
+pureEvalFunctions = [ ("apply", evalfuncApply)
+                      , ("call-with-current-continuation", evalfuncCallCC)
+                      , ("call-with-values", evalfuncCallWValues)
+                      , ("dynamic-wind", evalfuncDynamicWind)
+                      , ("eval", evalfuncEval)
+                      , ("pure-null-environment", evalfuncPureNullEnv)
+                      , ("current-environment", evalfuncInteractionEnv)
+                      , ("interaction-environment", evalfuncInteractionEnv)
+                      , ("make-environment", evalfuncMakeEnv)
 
-               -- Non-standard extensions
+                   -- Non-standard extensions
 #ifdef UseFfi
-                  , ("load-ffi", Language.Scheme.FFI.evalfuncLoadFFI)
+                      , ("load-ffi", Language.Scheme.FFI.evalfuncLoadFFI)
 #endif
 #ifdef UseLibraries
-                  , ("%import", evalfuncImport)
-                  , ("%bootstrap-import", bootstrapImport)
+                      , ("%import", evalfuncImport)
+                      , ("%bootstrap-import", bootstrapImport)
 #endif
-                  , ("%husk-switch-to-parent-environment", evalfuncUseParentEnv)
+                      , ("%husk-switch-to-parent-environment", evalfuncUseParentEnv)
 
-                  , ("exit-fail", evalfuncExitFail)
-                  , ("exit-success", evalfuncExitSuccess)
-                ]
+                    ]
+
+{- Primitive functions that extend the core evaluator -}
+evalFunctions :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [(String, [LispVal m r] -> ExceptT (LispError m r) m (LispVal m r))]
+evalFunctions = pureEvalFunctions ++ [ ("exit", evalfuncExit)
+                                     , ("load", evalfuncLoad)
+                                     , ("null-environment", evalfuncNullEnv)
+                                     , ("exit-fail", evalfuncExitFail)
+                                     , ("exit-success", evalfuncExitSuccess)
+                                     ]
 
 -- | Rethrow given error with call history, if available
 throwErrorWithCallHistory :: Monad m => LispVal m r -> LispError m r -> IOThrowsError m r (LispVal m r)
