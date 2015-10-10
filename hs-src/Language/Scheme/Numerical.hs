@@ -80,7 +80,7 @@ import Numeric
 import Text.Printf
 
 -- |A helper function to perform a numeric operation on two values
-numericBinop :: (Integer -> Integer -> Integer) -> [LispVal r] -> ThrowsError r (LispVal r)
+numericBinop :: (Integer -> Integer -> Integer) -> [LispVal m r] -> ThrowsError m r (LispVal m r)
 numericBinop _ singleVal@[_] = throwError $ NumArgs (Just 2) singleVal
 numericBinop op aparams = mapM unpackNum aparams >>= return . Number . foldl1 op
 
@@ -100,7 +100,7 @@ numerical types they accept. Within reason, a user should not have to know
 what numerical type they are passing when using these functions -}
 
 -- |Add the given numbers
-numAdd :: [LispVal r] -> ThrowsError r (LispVal r)
+numAdd :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numAdd [] = return $ Number 0
 numAdd aparams = do
   foldl1M (\ a b -> doAdd =<< (numCast [a, b])) aparams
@@ -111,7 +111,7 @@ numAdd aparams = do
         doAdd _ = throwError $ Default "Unexpected error in +"
 
 -- |Subtract the given numbers
-numSub :: [LispVal r] -> ThrowsError r (LispVal r)
+numSub :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numSub [] = throwError $ NumArgs (Just 1) []
 numSub [Number n] = return $ Number $ -1 * n
 numSub [Float n] = return $ Float $ -1 * n
@@ -126,7 +126,7 @@ numSub aparams = do
         doSub _ = throwError $ Default "Unexpected error in -"
 
 -- |Multiply the given numbers
-numMul :: [LispVal r] -> ThrowsError r (LispVal r)
+numMul :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numMul [] = return $ Number 1
 numMul aparams = do
   foldl1M (\ a b -> doMul =<< (numCast [a, b])) aparams
@@ -137,7 +137,7 @@ numMul aparams = do
         doMul _ = throwError $ Default "Unexpected error in *"
 
 -- |Divide the given numbers
-numDiv :: [LispVal r] -> ThrowsError r (LispVal r)
+numDiv :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numDiv [] = throwError $ NumArgs (Just 1) []
 numDiv [Number 0] = throwError $ DivideByZero 
 numDiv [Rational 0] = throwError $ DivideByZero  
@@ -164,7 +164,7 @@ numDiv aparams = do
         doDiv _ = throwError $ Default "Unexpected error in /"
 
 -- |Take the modulus of the given numbers
-numMod :: [LispVal r] -> ThrowsError r (LispVal r)
+numMod :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numMod [] = return $ Number 1
 numMod aparams = do
   foldl1M (\ a b -> doMod =<< (numCast [a, b])) aparams
@@ -176,9 +176,9 @@ numMod aparams = do
 
 -- |Compare a series of numbers using a given numeric comparison
 --  function and an array of lisp values
-numBoolBinopCompare :: (LispVal r
-                    -> LispVal r -> ThrowsError r (LispVal r))
-                    -> LispVal r -> [LispVal r] -> ThrowsError r (LispVal r)
+numBoolBinopCompare :: (LispVal m r
+                    -> LispVal m r -> ThrowsError m r (LispVal m r))
+                    -> LispVal m r -> [LispVal m r] -> ThrowsError m r (LispVal m r)
 numBoolBinopCompare cmp n1 (n2 : ns) = do
   List [n1', n2'] <- numCast [n1, n2]
   result <- cmp n1' n2'
@@ -188,7 +188,7 @@ numBoolBinopCompare cmp n1 (n2 : ns) = do
 numBoolBinopCompare _ _ _ = return $ Bool True
 
 -- |Numeric equals
-numBoolBinopEq :: [LispVal r] -> ThrowsError r (LispVal r)
+numBoolBinopEq :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numBoolBinopEq [] = throwError $ NumArgs (Just 0) []
 numBoolBinopEq (n : ns) = numBoolBinopCompare cmp n ns
   where
@@ -200,7 +200,7 @@ numBoolBinopEq (n : ns) = numBoolBinopCompare cmp n ns
     cmp _ _ = throwError $ Default "Unexpected error in ="
 
 -- |Numeric greater than
-numBoolBinopGt :: [LispVal r] -> ThrowsError r (LispVal r)
+numBoolBinopGt :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numBoolBinopGt [] = throwError $ NumArgs (Just 0) []
 numBoolBinopGt (n : ns) = numBoolBinopCompare cmp n ns
   where
@@ -211,7 +211,7 @@ numBoolBinopGt (n : ns) = numBoolBinopCompare cmp n ns
     cmp _ _ = throwError $ Default "Unexpected error in >"
 
 -- |Numeric greater than equal
-numBoolBinopGte :: [LispVal r] -> ThrowsError r (LispVal r)
+numBoolBinopGte :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numBoolBinopGte [] = throwError $ NumArgs (Just 0) []
 numBoolBinopGte (n : ns) = numBoolBinopCompare cmp n ns
   where
@@ -222,7 +222,7 @@ numBoolBinopGte (n : ns) = numBoolBinopCompare cmp n ns
     cmp _ _ = throwError $ Default "Unexpected error in >="
 
 -- |Numeric less than 
-numBoolBinopLt :: [LispVal r] -> ThrowsError r (LispVal r)
+numBoolBinopLt :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numBoolBinopLt [] = throwError $ NumArgs (Just 0) []
 numBoolBinopLt (n : ns) = numBoolBinopCompare cmp n ns
   where
@@ -233,7 +233,7 @@ numBoolBinopLt (n : ns) = numBoolBinopCompare cmp n ns
     cmp _ _ = throwError $ Default "Unexpected error in <"
 
 -- |Numeric less than equal
-numBoolBinopLte :: [LispVal r] -> ThrowsError r (LispVal r)
+numBoolBinopLte :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numBoolBinopLte [] = throwError $ NumArgs (Just 0) []
 numBoolBinopLte (n : ns) = numBoolBinopCompare cmp n ns
   where
@@ -244,7 +244,7 @@ numBoolBinopLte (n : ns) = numBoolBinopCompare cmp n ns
     cmp _ _ = throwError $ Default "Unexpected error in <="
 
 -- |Accept two numbers and cast one of them to the appropriate type, if necessary
-numCast :: [LispVal r] -> ThrowsError r (LispVal r)
+numCast :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numCast [a@(Number _), b@(Number _)] = return $ List [a, b]
 numCast [a@(Float _), b@(Float _)] = return $ List [a, b]
 numCast [a@(Rational _), b@(Rational _)] = return $ List [a, b]
@@ -271,7 +271,7 @@ numCast [a, b] = case a of
 numCast _ = throwError $ Default "Unexpected error in numCast"
 
 -- |Convert the given number to a rational
-numRationalize :: [LispVal r] -> ThrowsError r (LispVal r)
+numRationalize :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numRationalize [(Number n)] = return $ Rational $ toRational n
 numRationalize [(Float n)] = return $ Rational $ toRational n
 numRationalize [n@(Rational _)] = return n
@@ -279,7 +279,7 @@ numRationalize [x] = throwError $ TypeMismatch "number" x
 numRationalize badArgList = throwError $ NumArgs (Just 1) badArgList
 
 -- |Round the given number
-numRound :: [LispVal r] -> ThrowsError r (LispVal r)
+numRound :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numRound [n@(Number _)] = return n
 numRound [(Rational n)] = return $ Number $ round n
 numRound [(Float n)] = return $ Float $ fromInteger $ round n
@@ -289,7 +289,7 @@ numRound [x] = throwError $ TypeMismatch "number" x
 numRound badArgList = throwError $ NumArgs (Just 1) badArgList
 
 -- |Floor the given number
-numFloor :: [LispVal r] -> ThrowsError r (LispVal r)
+numFloor :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numFloor [n@(Number _)] = return n
 numFloor [(Rational n)] = return $ Number $ floor n
 numFloor [(Float n)] = return $ Float $ fromInteger $ floor n
@@ -299,7 +299,7 @@ numFloor [x] = throwError $ TypeMismatch "number" x
 numFloor badArgList = throwError $ NumArgs (Just 1) badArgList
 
 -- |Take the ceiling of the given number
-numCeiling :: [LispVal r] -> ThrowsError r (LispVal r)
+numCeiling :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numCeiling [n@(Number _)] = return n
 numCeiling [(Rational n)] = return $ Number $ ceiling n
 numCeiling [(Float n)] = return $ Float $ fromInteger $ ceiling n
@@ -309,7 +309,7 @@ numCeiling [x] = throwError $ TypeMismatch "number" x
 numCeiling badArgList = throwError $ NumArgs (Just 1) badArgList
 
 -- |Truncate the given number
-numTruncate :: [LispVal r] -> ThrowsError r (LispVal r)
+numTruncate :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numTruncate [n@(Number _)] = return n
 numTruncate [(Rational n)] = return $ Number $ truncate n
 numTruncate [(Float n)] = return $ Float $ fromInteger $ truncate n
@@ -319,7 +319,7 @@ numTruncate [x] = throwError $ TypeMismatch "number" x
 numTruncate badArgList = throwError $ NumArgs (Just 1) badArgList
 
 -- |Sine
-numSin :: [LispVal r] -> ThrowsError r (LispVal r)
+numSin :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numSin [(Number n)] = return $ Float $ sin $ fromInteger n
 numSin [(Float n)] = return $ Float $ sin n
 numSin [(Rational n)] = return $ Float $ sin $ fromRational n
@@ -328,7 +328,7 @@ numSin [x] = throwError $ TypeMismatch "number" x
 numSin badArgList = throwError $ NumArgs (Just 1) badArgList
 
 -- |Cosine
-numCos :: [LispVal r] -> ThrowsError r (LispVal r)
+numCos :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numCos [(Number n)] = return $ Float $ cos $ fromInteger n
 numCos [(Float n)] = return $ Float $ cos n
 numCos [(Rational n)] = return $ Float $ cos $ fromRational n
@@ -337,7 +337,7 @@ numCos [x] = throwError $ TypeMismatch "number" x
 numCos badArgList = throwError $ NumArgs (Just 1) badArgList
 
 -- |Tangent
-numTan :: [LispVal r] -> ThrowsError r (LispVal r)
+numTan :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numTan [(Number n)] = return $ Float $ tan $ fromInteger n
 numTan [(Float n)] = return $ Float $ tan n
 numTan [(Rational n)] = return $ Float $ tan $ fromRational n
@@ -346,7 +346,7 @@ numTan [x] = throwError $ TypeMismatch "number" x
 numTan badArgList = throwError $ NumArgs (Just 1) badArgList
 
 -- |Arcsine
-numAsin :: [LispVal r] -> ThrowsError r (LispVal r)
+numAsin :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numAsin [(Number n)] = return $ Float $ asin $ fromInteger n
 numAsin [(Float n)] = return $ Float $ asin n
 numAsin [(Rational n)] = return $ Float $ asin $ fromRational n
@@ -355,7 +355,7 @@ numAsin [x] = throwError $ TypeMismatch "number" x
 numAsin badArgList = throwError $ NumArgs (Just 1) badArgList
 
 -- |Arccosine
-numAcos :: [LispVal r] -> ThrowsError r (LispVal r)
+numAcos :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numAcos [(Number n)] = return $ Float $ acos $ fromInteger n
 numAcos [(Float n)] = return $ Float $ acos n
 numAcos [(Rational n)] = return $ Float $ acos $ fromRational n
@@ -364,7 +364,7 @@ numAcos [x] = throwError $ TypeMismatch "number" x
 numAcos badArgList = throwError $ NumArgs (Just 1) badArgList
 
 -- |Arctangent
-numAtan :: [LispVal r] -> ThrowsError r (LispVal r)
+numAtan :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numAtan [(Number n)] = return $ Float $ atan $ fromInteger n
 numAtan [Number y, Number x] = return $ Float $ phase $ (fromInteger x) :+ (fromInteger y)
 numAtan [(Float n)] = return $ Float $ atan n
@@ -376,7 +376,7 @@ numAtan [x] = throwError $ TypeMismatch "number" x
 numAtan badArgList = throwError $ NumArgs (Just 1) badArgList
 
 -- |Take the square root of the given number
-numSqrt :: [LispVal r] -> ThrowsError r (LispVal r)
+numSqrt :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numSqrt [(Number n)] = if n >= 0 then return $ Float $ sqrt $ fromInteger n
                                  else return $ Complex $ sqrt ((fromInteger n) :+ 0)
 numSqrt [(Float n)] = if n >= 0 then return $ Float $ sqrt n
@@ -387,7 +387,7 @@ numSqrt [x] = throwError $ TypeMismatch "number" x
 numSqrt badArgList = throwError $ NumArgs (Just 1) badArgList
 
 -- |Raise the first number to the power of the second
-numExpt :: [LispVal r] -> ThrowsError r (LispVal r)
+numExpt :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numExpt [(Number n), (Number p)] = return $ Float $ (fromInteger n) ^ p
 numExpt [(Rational n), (Number p)] = return $ Float $ (fromRational n) ^ p
 numExpt [(Float n), (Number p)] = return $ Float $ n ^ p
@@ -403,7 +403,7 @@ numExpt badArgList = throwError $ NumArgs (Just 2) badArgList
 --        doExpt (List [(Complex a), (Complex b)]) = return $ Complex $ a ^ b -}
 
 -- |Take the exponent of the given number
-numExp :: [LispVal r] -> ThrowsError r (LispVal r)
+numExp :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numExp [(Number n)] = return $ Float $ exp $ fromInteger n
 numExp [(Float n)] = return $ Float $ exp n
 numExp [(Rational n)] = return $ Float $ exp $ fromRational n
@@ -412,7 +412,7 @@ numExp [x] = throwError $ TypeMismatch "number" x
 numExp badArgList = throwError $ NumArgs (Just 1) badArgList
 
 -- |Compute the log of a given number
-numLog :: [LispVal r] -> ThrowsError r (LispVal r)
+numLog :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numLog [(Number n)] = return $ Float $ log $ fromInteger n
 numLog [Number n, Number base] = return $ Float $ logBase (fromInteger base) (fromInteger n)
 numLog [(Float n)] = return $ Float $ log n
@@ -427,11 +427,11 @@ numLog badArgList = throwError $ NumArgs (Just 1) badArgList
 -- Complex number functions
 
 -- |Create a complex number
-buildComplex :: LispVal r 
+buildComplex :: LispVal m r 
              -- ^ Real part
-             -> LispVal r 
+             -> LispVal m r 
              -- ^ Imaginary part
-             -> ThrowsError r (LispVal r)
+             -> ThrowsError m r (LispVal m r)
              -- ^ Complex number
 buildComplex (Number x) (Number y) = return $ Complex $ (fromInteger x) :+ (fromInteger y)
 buildComplex (Number x) (Rational y) = return $ Complex $ (fromInteger x) :+ (fromRational y)
@@ -445,31 +445,31 @@ buildComplex (Float x) (Float y) = return $ Complex $ x :+ y
 buildComplex x y = throwError $ TypeMismatch "number" $ List [x, y]
 
 -- |Create a complex number given its real and imaginary parts
-numMakeRectangular :: [LispVal r] -> ThrowsError r (LispVal r)
+numMakeRectangular :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numMakeRectangular [x, y] = buildComplex x y
 numMakeRectangular badArgList = throwError $ NumArgs (Just 2) badArgList
 
 -- |Create a complex number from its magnitude and phase (angle)
-numMakePolar :: [LispVal r] -> ThrowsError r (LispVal r)
+numMakePolar :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numMakePolar [(Float x), (Float y)] = return $ Complex $ mkPolar x y
 numMakePolar [(Float _), y] = throwError $ TypeMismatch "real" y
 numMakePolar [x, (Float _)] = throwError $ TypeMismatch "real real" $ x
 numMakePolar badArgList = throwError $ NumArgs (Just 2) badArgList
 
 -- |The phase of a complex number
-numAngle :: [LispVal r] -> ThrowsError r (LispVal r)
+numAngle :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numAngle [(Complex c)] = return $ Float $ phase c
 numAngle [x] = throwError $ TypeMismatch "complex number" x
 numAngle badArgList = throwError $ NumArgs (Just 1) badArgList
 
 -- |The nonnegative magnitude of a complex number
-numMagnitude :: [LispVal r] -> ThrowsError r (LispVal r)
+numMagnitude :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numMagnitude [(Complex c)] = return $ Float $ magnitude c
 numMagnitude [x] = throwError $ TypeMismatch "complex number" x
 numMagnitude badArgList = throwError $ NumArgs (Just 1) badArgList
 
 -- |Retrieve real part of a complex number
-numRealPart :: [LispVal r] -> ThrowsError r (LispVal r)
+numRealPart :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numRealPart [(Complex c)] = return $ Float $ realPart c
 numRealPart [n@(Float _)] = return n
 numRealPart [n@(Rational _)] = return n
@@ -478,7 +478,7 @@ numRealPart [x] = throwError $ TypeMismatch "complex number" x
 numRealPart badArgList = throwError $ NumArgs (Just 1) badArgList
 
 -- |Retrieve imaginary part of a complex number
-numImagPart :: [LispVal r] -> ThrowsError r (LispVal r)
+numImagPart :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numImagPart [(Complex c)] = do
   let n = imagPart c
       f = Float n
@@ -492,7 +492,7 @@ numImagPart [x] = throwError $ TypeMismatch "complex number" x
 numImagPart badArgList = throwError $ NumArgs (Just 1) badArgList
 
 -- |Take the numerator of the given number
-numNumerator :: [LispVal r] -> ThrowsError r (LispVal r)
+numNumerator :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numNumerator [n@(Number _)] = return n
 numNumerator [(Rational r)] = return $ Number $ numerator r
 numNumerator [(Float f)] = return $ Float $ fromInteger . numerator . toRational $ f
@@ -500,7 +500,7 @@ numNumerator [x] = throwError $ TypeMismatch "rational number" x
 numNumerator badArgList = throwError $ NumArgs (Just 1) badArgList
 
 -- |Take the denominator of the given number
-numDenominator :: [LispVal r] -> ThrowsError r (LispVal r)
+numDenominator :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numDenominator [Number _] = return $ Number 1
 numDenominator [(Rational r)] = return $ Number $ denominator r
 numDenominator [(Float f)] = return $ Float $ fromInteger $ denominator $ toRational f
@@ -508,7 +508,7 @@ numDenominator [x] = throwError $ TypeMismatch "rational number" x
 numDenominator badArgList = throwError $ NumArgs (Just 1) badArgList
 
 -- |Convert an exact number to inexact
-numExact2Inexact :: [LispVal r] -> ThrowsError r (LispVal r)
+numExact2Inexact :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numExact2Inexact [(Number n)] = return $ Float $ fromInteger n
 numExact2Inexact [(Rational n)] = return $ Float $ fromRational n
 numExact2Inexact [n@(Float _)] = return n
@@ -517,7 +517,7 @@ numExact2Inexact [badType] = throwError $ TypeMismatch "number" badType
 numExact2Inexact badArgList = throwError $ NumArgs (Just 1) badArgList
 
 -- |Convert an inexact number to exact
-numInexact2Exact :: [LispVal r] -> ThrowsError r (LispVal r)
+numInexact2Exact :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 numInexact2Exact [n@(Number _)] = return n
 numInexact2Exact [n@(Rational _)] = return n
 numInexact2Exact [(Float n)] = return $ Number $ round n
@@ -526,7 +526,7 @@ numInexact2Exact [badType] = throwError $ TypeMismatch "number" badType
 numInexact2Exact badArgList = throwError $ NumArgs (Just 1) badArgList
 
 -- |Convert a number to a string; radix is optional, defaults to base 10
-num2String :: [LispVal r] -> ThrowsError r (LispVal r)
+num2String :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 num2String [(Number n)] = return $ String $ show n
 num2String [(Number n), (Number radix)] = do
   case radix of
@@ -543,17 +543,17 @@ num2String [x] = throwError $ TypeMismatch "number" x
 num2String badArgList = throwError $ NumArgs (Just 1) badArgList
 
 -- | Determine if the given value is not a number
-isNumNaN :: [LispVal r] -> ThrowsError r (LispVal r)
+isNumNaN :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 isNumNaN ([Float n]) = return $ Bool $ isNaN n
 isNumNaN _ = return $ Bool False
 
 -- | Determine if number is infinite
-isNumInfinite :: [LispVal r] -> ThrowsError r (LispVal r)
+isNumInfinite :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 isNumInfinite ([Float n]) = return $ Bool $ isInfinite n
 isNumInfinite _ = return $ Bool False
 
 -- | Determine if number is not infinite
-isNumFinite :: [LispVal r] -> ThrowsError r (LispVal r)
+isNumFinite :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 isNumFinite ([Number _]) = return $ Bool True
 isNumFinite ([Float n]) = return $ Bool $ not $ isInfinite n
 isNumFinite ([Complex _]) = return $ Bool True
@@ -561,7 +561,7 @@ isNumFinite ([Rational _]) = return $ Bool True
 isNumFinite _ = return $ Bool False
 
 -- | Determine if number is exact
-isNumExact :: [LispVal r] -> ThrowsError r (LispVal r)
+isNumExact :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 isNumExact ([Number _]) = return $ Bool True
 isNumExact ([Float _]) = return $ Bool False
 isNumExact ([Complex _]) = return $ Bool False -- TODO: could be either
@@ -569,7 +569,7 @@ isNumExact ([Rational _]) = return $ Bool True
 isNumExact _ = return $ Bool False
 
 -- | Determine if number is inexact
-isNumInexact :: [LispVal r] -> ThrowsError r (LispVal r)
+isNumInexact :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 isNumInexact ([Number _])   = return $ Bool False
 isNumInexact ([Float _])    = return $ Bool True
 isNumInexact ([Complex _])  = return $ Bool True
@@ -577,7 +577,7 @@ isNumInexact ([Rational _]) = return $ Bool False
 isNumInexact _ = return $ Bool False
 
 -- |Predicate to determine if given value is a number
-isNumber :: [LispVal r] -> ThrowsError r (LispVal r)
+isNumber :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 isNumber ([Number _]) = return $ Bool True
 isNumber ([Float _]) = return $ Bool True
 isNumber ([Complex _]) = return $ Bool True
@@ -586,7 +586,7 @@ isNumber _ = return $ Bool False
 
 -- |Predicate to determine if given number is complex.
 --  Keep in mind this does not just look at the types 
-isComplex :: [LispVal r] -> ThrowsError r (LispVal r)
+isComplex :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 isComplex ([Complex _]) = return $ Bool True
 isComplex ([Number _]) = return $ Bool True
 isComplex ([Rational _]) = return $ Bool True
@@ -595,7 +595,7 @@ isComplex _ = return $ Bool False
 
 -- |Predicate to determine if given number is a real.
 --  Keep in mind this does not just look at the types 
-isReal :: [LispVal r] -> ThrowsError r (LispVal r)
+isReal :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 isReal ([Number _]) = return $ Bool True
 isReal ([Rational _]) = return $ Bool True
 isReal ([Float _]) = return $ Bool True
@@ -610,7 +610,7 @@ isReal _ = return $ Bool False
 
 -- |Predicate to determine if given number is a rational.
 --  Keep in mind this does not just look at the types 
-isRational :: [LispVal r] -> ThrowsError r (LispVal r)
+isRational :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 isRational ([Number _]) = return $ Bool True
 isRational ([Rational _]) = return $ Bool True
 isRational ([Float n]) = return $ Bool $ not $ isInfinite n 
@@ -619,7 +619,7 @@ isRational _ = return $ Bool False
 -- |Predicate to determine if given number is an integer.
 --  Keep in mind this does not just look at the types; 
 --  a floating point input value can return true, for example.
-isInteger :: [LispVal r] -> ThrowsError r (LispVal r)
+isInteger :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 isInteger ([Number _]) = return $ Bool True
 isInteger ([Complex n]) = do
   return $ Bool $ (isFloatAnInteger $ Float $ realPart n) && (isFloatAnInteger $ Float $ imagPart n)
@@ -632,7 +632,7 @@ isInteger _ = return $ Bool False
 
 -- |A utility function to determine if given value is a floating point
 --  number representing an whole number (integer).
-isFloatAnInteger :: LispVal r -> Bool
+isFloatAnInteger :: LispVal m r -> Bool
 isFloatAnInteger (Float n) = 
     ((floor n) :: Integer) == ((ceiling n) :: Integer)
 isFloatAnInteger _ = False
@@ -641,6 +641,6 @@ isFloatAnInteger _ = False
 
 -- |Extract an integer from the given value, throwing a type error if
 --  the wrong type is passed.
-unpackNum :: LispVal r -> ThrowsError r Integer
+unpackNum :: LispVal m r -> ThrowsError m r Integer
 unpackNum (Number n) = return n
 unpackNum notNum = throwError $ TypeMismatch "number" notNum

@@ -2,6 +2,7 @@
 {-# Language ExistentialQuantification #-}
 {-# Language FlexibleContexts #-}
 {-# Language ScopedTypeVariables #-}
+{-# Language RankNTypes #-}
 
 {- |
 Module      : Language.Scheme.Primitives
@@ -158,6 +159,7 @@ module Language.Scheme.Primitives (
  , getEnvVars
 -- , systemRead
 
+ , MonadSerial (..)
  ) where
 import Language.Scheme.Numerical
 import Language.Scheme.Parser
@@ -169,11 +171,11 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.UTF8 as BSU
 import Data.Char hiding (isSymbol)
 import Data.Array
+import Data.IORef
 import qualified Data.Knob as DK
 --import qualified Data.List as DL
 import qualified Data.Map
 import qualified Data.Time.Clock.POSIX
-import Data.Unique
 import Data.Word
 import System.Directory (doesFileExist, removeFile)
 import qualified System.Environment as SE
@@ -184,12 +186,27 @@ import qualified System.Process
 --import System.Process (readProcess)
 --import Debug.Trace
 
+import System.IO.Unsafe (unsafePerformIO) -- For constructing the global serialRef
+
 #if __GLASGOW_HASKELL__ < 702
 try' = try
 #else
 try' :: IO a -> IO (Either IOError a)
 try' = tryIOError
 #endif
+
+class Monad m => MonadSerial m where
+  newSerial :: m Integer
+
+{-# NOINLINE serialRef #-}
+serialRef :: IORef Integer
+serialRef = unsafePerformIO $ newIORef 1
+
+instance MonadSerial IO where
+  newSerial = atomicModifyIORef' serialRef $ \x -> (succ x, x)
+
+instance MonadSerial m => MonadSerial (ExceptT e m) where
+  newSerial = lift newSerial
 
 ---------------------------------------------------
 -- I/O Primitives
@@ -205,11 +222,11 @@ try' = tryIOError
 --   Returns: Port
 --
 makePort
-    :: (ReadRef r IO, PtrEq r)
+    :: (MonadIO m, ReadRef r m, PtrEq m r)
     => (FilePath -> IOMode -> IO Handle)
     -> IOMode
-    -> [LispVal r]
-    -> IOThrowsError r (LispVal r)
+    -> [LispVal m r]
+    -> IOThrowsError m r (LispVal m r)
 makePort openFnc mode [String filename] = do
     h <- liftIO $ openFnc filename mode
     return $ Port h Nothing
@@ -218,7 +235,7 @@ makePort _ _ [] = throwError $ NumArgs (Just 1) []
 makePort _ _ args@(_ : _) = throwError $ NumArgs (Just 1) args
 
 -- |Create an memory-backed port
-makeBufferPort :: Maybe (LispVal r) -> IOThrowsError r (LispVal r)
+makeBufferPort :: MonadIO m => Maybe (LispVal m r) -> IOThrowsError m r (LispVal m r)
 makeBufferPort buf = do
     let mode = case buf of
                  Nothing -> WriteMode
@@ -234,7 +251,7 @@ makeBufferPort buf = do
     return $ Port h (Just k)
 
 -- |Read byte buffer from a given port
-getBufferFromPort :: LispVal r -> IOThrowsError r BSU.ByteString
+getBufferFromPort :: MonadIO m => LispVal m r -> IOThrowsError m r BSU.ByteString
 getBufferFromPort (Port h (Just k)) = do
     _ <- liftIO $ hFlush h
     DK.getContents k
@@ -242,7 +259,7 @@ getBufferFromPort args = do
     throwError $ TypeMismatch "output-port" args
 
 -- |Create a new input string buffer
-openInputString :: (ReadRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+openInputString :: (MonadIO m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 openInputString [p@(Pointer {})] = recDerefPtrs p >>= box >>= openInputString
 openInputString [buf@(String _)] = makeBufferPort (Just buf)
 openInputString args = if length args == 1
@@ -250,11 +267,11 @@ openInputString args = if length args == 1
     else throwError $ NumArgs (Just 1) args
 
 -- |Create a new output string buffer
-openOutputString :: [LispVal r] -> IOThrowsError r (LispVal r)
+openOutputString :: MonadIO m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 openOutputString _ = makeBufferPort Nothing
 
 -- |Create a new input bytevector buffer
-openInputByteVector :: (ReadRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+openInputByteVector :: (MonadIO m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 openInputByteVector [p@(Pointer {})] = recDerefPtrs p >>= box >>= openInputByteVector
 openInputByteVector [buf@(ByteVector _)] = makeBufferPort (Just buf)
 openInputByteVector args = if length args == 1
@@ -262,12 +279,12 @@ openInputByteVector args = if length args == 1
     else throwError $ NumArgs (Just 1) args
 
 -- |Create a new output bytevector buffer
-openOutputByteVector :: [LispVal r] -> IOThrowsError r (LispVal r)
+openOutputByteVector :: MonadIO m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 openOutputByteVector _ = makeBufferPort Nothing
 
 
 -- |Get string written to string-output-port
-getOutputString :: (ReadRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+getOutputString :: (MonadIO m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 getOutputString [p@(Pointer {})] = recDerefPtrs p >>= box >>= getOutputString
 getOutputString [p@(Port port _)] = do
     o <- liftIO $ hIsOpen port
@@ -279,7 +296,7 @@ getOutputString args = do
     throwError $ TypeMismatch "output-port" $ List args
 
 -- |Get bytevector written to bytevector-output-port
-getOutputByteVector :: (ReadRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+getOutputByteVector :: (MonadIO m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 getOutputByteVector [p@(Pointer {})] = recDerefPtrs p >>= box >>= getOutputByteVector
 getOutputByteVector [p@(Port port _)] = do
     o <- liftIO $ hIsOpen port
@@ -297,7 +314,7 @@ getOutputByteVector args = do
 --
 --   Returns: Bool - True if the port was closed, false otherwise
 --
-closePort :: (ReadRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+closePort :: (MonadIO m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 closePort [p@(Pointer {})] = recDerefPtrs p >>= box >>= closePort
 closePort [Port port _] = liftIO $ hClose port >> (return $ Bool True)
 closePort _ = return $ Bool False
@@ -314,7 +331,7 @@ other I/O functions hooking into these instead of std* -}
 --
 --   Returns: Port
 --
-currentInputPort :: [LispVal r] -> IOThrowsError r (LispVal r)
+currentInputPort :: Monad m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 currentInputPort _ = return $ Port stdin Nothing
 -- |Return the current input port
 --
@@ -322,11 +339,11 @@ currentInputPort _ = return $ Port stdin Nothing
 --
 --   Returns: Port
 --
-currentOutputPort :: [LispVal r] -> IOThrowsError r (LispVal r)
+currentOutputPort :: Monad m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 currentOutputPort _ = return $ Port stdout Nothing
 
 -- | Flush the given output port
-flushOutputPort :: (ReadRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+flushOutputPort :: (MonadIO m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 flushOutputPort [] = liftIO $ hFlush stdout >> (return $ Bool True)
 flushOutputPort [p@(Pointer {})] = recDerefPtrs p >>= box >>= flushOutputPort
 flushOutputPort [p@(Port _ _)] = 
@@ -340,7 +357,7 @@ flushOutputPort _ = return $ Bool False
 --   * Port
 --
 --   Returns: Bool
-isTextPort :: (ReadRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+isTextPort :: (MonadIO m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 isTextPort [p@(Pointer {})] = recDerefPtrs p >>= box >>= isTextPort
 isTextPort [Port port _] = do
     val <- liftIO $ isTextPort' port
@@ -354,7 +371,7 @@ isTextPort _ = return $ Bool False
 --   * Port
 --
 --   Returns: Bool
-isBinaryPort :: (ReadRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+isBinaryPort :: (MonadIO m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 isBinaryPort [p@(Pointer {})] = recDerefPtrs p >>= box >>= isBinaryPort
 isBinaryPort [Port port _] = do
     val <- liftIO $ isTextPort' port
@@ -376,7 +393,7 @@ isTextPort' port = do
 --   * Port
 --
 --   Returns: Bool
-isInputPortOpen :: (ReadRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+isInputPortOpen :: (MonadIO m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 isInputPortOpen [p@(Pointer {})] = recDerefPtrs p >>= box >>= isInputPortOpen
 isInputPortOpen [p@(Port _ _)] = do
   withOpenPort p $ \port -> do
@@ -386,7 +403,7 @@ isInputPortOpen [p@(Port _ _)] = do
 isInputPortOpen _ = return $ Bool False
 
 -- | Helper function to ensure a port is open, to prevent Haskell errors
-withOpenPort :: (ReadRef r IO, PtrEq r) => LispVal r -> (Handle -> IOThrowsError r (LispVal r)) -> IOThrowsError r (LispVal r)
+withOpenPort :: (MonadIO m, ReadRef r m, PtrEq m r) => LispVal m r -> (Handle -> IOThrowsError m r (LispVal m r)) -> IOThrowsError m r (LispVal m r)
 withOpenPort p@(Pointer {}) proc = do
     obj <- recDerefPtrs p 
     withOpenPort obj proc
@@ -403,7 +420,7 @@ withOpenPort _ _ = return $ Bool False
 --   * Port
 --
 --   Returns: Bool
-isOutputPortOpen :: (ReadRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+isOutputPortOpen :: (MonadIO m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 isOutputPortOpen [p@(Pointer {})] = recDerefPtrs p >>= box >>= isOutputPortOpen
 isOutputPortOpen [p@(Port _ _)] = do
   withOpenPort p $ \port -> do
@@ -420,7 +437,7 @@ isOutputPortOpen _ = return $ Bool False
 --
 --   Returns: Bool - True if an input port, false otherwise
 --
-isInputPort :: (ReadRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+isInputPort :: (MonadIO m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 isInputPort [p@(Pointer {})] = recDerefPtrs p >>= box >>= isInputPort
 isInputPort [p@(Port _ _)] = 
   withOpenPort p $ \port -> liftM Bool $ liftIO $ hIsReadable port
@@ -434,7 +451,7 @@ isInputPort _ = return $ Bool False
 --
 --   Returns: Bool - True if an output port, false otherwise
 --
-isOutputPort :: (ReadRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+isOutputPort :: (MonadIO m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 isOutputPort [p@(Pointer {})] = recDerefPtrs p >>= box >>= isOutputPort
 isOutputPort [p@(Port _ _)] = 
     withOpenPort p $ \port -> liftM Bool $ liftIO $ hIsWritable port
@@ -448,7 +465,7 @@ isOutputPort _ = return $ Bool False
 --
 --   Returns: Bool
 --
-isCharReady :: (ReadRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+isCharReady :: (MonadIO m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 isCharReady [p@(Pointer {})] = recDerefPtrs p >>= box >>= isCharReady
 isCharReady [Port port _] = do --liftM Bool $ liftIO $ hReady port
     result <- liftIO $ try' (liftIO $ hReady port)
@@ -467,7 +484,7 @@ isCharReady _ = return $ Bool False
 --
 --   Returns: LispVal
 --
-readProc :: (ReadRef r IO, PtrEq r) => Bool -> [LispVal r] -> IOThrowsError r (LispVal r)
+readProc :: (MonadIO m, ReadRef r m, PtrEq m r) => Bool -> [LispVal m r] -> IOThrowsError m r (LispVal m r)
 readProc mode [] = readProc mode [Port stdin Nothing]
 readProc mode [p@(Pointer {})] = recDerefPtrs p >>= box >>= readProc mode
 readProc mode [Port port _] = do
@@ -493,7 +510,7 @@ readProc _ args = if length args == 1
 --
 --   Returns: Char
 --
-readCharProc :: (ReadRef r IO, PtrEq r) => (Handle -> IO Char) -> [LispVal r] -> IOThrowsError r (LispVal r)
+readCharProc :: (MonadIO m, ReadRef r m, PtrEq m r) => (Handle -> IO Char) -> [LispVal m r] -> IOThrowsError m r (LispVal m r)
 readCharProc func [p@(Pointer {})] = recDerefPtrs p >>= box >>= readCharProc func
 readCharProc func [] = readCharProc func [Port stdin Nothing]
 readCharProc func [p@(Port _ _)] = do
@@ -519,7 +536,7 @@ readCharProc _ args = if length args == 1
 --   * Port - Port to read from
 --
 --   Returns: ByteVector
-readByteVector :: [LispVal r] -> IOThrowsError r (LispVal r)
+readByteVector :: MonadIO m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 readByteVector args = readBuffer args ByteVector
 
 -- | Read a string from the given port
@@ -530,11 +547,11 @@ readByteVector args = readBuffer args ByteVector
 --   * Port - Port to read from
 --
 --   Returns: String
-readString :: [LispVal r] -> IOThrowsError r (LispVal r)
+readString :: MonadIO m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 readString args = readBuffer args (String . BSU.toString)
 
 -- |Helper function to read n bytes from a port into a buffer
-readBuffer :: [LispVal r] -> (BSU.ByteString -> LispVal r) -> IOThrowsError r (LispVal r)
+readBuffer :: MonadIO m => [LispVal m r] -> (BSU.ByteString -> LispVal m r) -> IOThrowsError m r (LispVal m r)
 readBuffer [Number n, Port port _] rvfnc = do
     input <- liftIO $ try' (liftIO $ BS.hGet port $ fromInteger n)
     case input of
@@ -561,10 +578,10 @@ readBuffer args _ = if length args == 2
 --
 {- writeProc :: --forall a (m :: * -> *).
              (MonadIO m, MonadError LispError m) =>
-             (Handle -> LispVal r -> IO a) -> [LispVal r] -> m (LispVal r) -}
-writeProc :: (ReadRef r IO, PtrEq r)
-          => (Handle -> LispVal r -> IO a)
-          -> [LispVal r] -> IOThrowsError r (LispVal r)
+             (Handle -> LispVal m r -> IO a) -> [LispVal m r] -> m (LispVal m r) -}
+writeProc :: (MonadIO m, ReadRef r m, PtrEq m r)
+          => (Handle -> LispVal m r -> IO a)
+          -> [LispVal m r] -> IOThrowsError m r (LispVal m r)
 writeProc func [obj] = do
     dobj <- recDerefPtrs obj -- Last opportunity to do this before writing
     writeProc func [dobj, Port stdout Nothing]
@@ -588,7 +605,7 @@ writeProc _ other = if length other == 2
 --
 --   Returns: (None)
 --
-writeCharProc :: [LispVal r] -> IOThrowsError r (LispVal r)
+writeCharProc :: MonadIO m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 writeCharProc [obj] = writeCharProc [obj, Port stdout Nothing]
 writeCharProc [obj@(Char _), Port port _] = do
     output <- liftIO $ try' (liftIO $ (hPutStr port $ show obj))
@@ -607,7 +624,7 @@ writeCharProc other = if length other == 2
 --   * Port
 --
 --   Returns: (unspecified)
-writeByteVector :: (ReadRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+writeByteVector :: (MonadIO m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 writeByteVector args = writeBuffer args bv2b
   where
     bv2b obj = do
@@ -622,7 +639,7 @@ writeByteVector args = writeBuffer args bv2b
 --   * Port
 --
 --   Returns: (unspecified)
-writeString :: (ReadRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+writeString :: (MonadIO m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 writeString args = writeBuffer args str2b
   where
     str2b obj = do
@@ -630,7 +647,7 @@ writeString args = writeBuffer args str2b
         return $ BSU.fromString str
 
 -- |Helper function to write buffer-based data to output port
-writeBuffer :: [LispVal r] -> (LispVal r -> IOThrowsError r BSU.ByteString) -> IOThrowsError r (LispVal r)
+writeBuffer :: MonadIO m => [LispVal m r] -> (LispVal m r -> IOThrowsError m r BSU.ByteString) -> IOThrowsError m r (LispVal m r)
 writeBuffer [obj, Port port _] getBS = do
     bs <- getBS obj
     output <- liftIO $ try' (liftIO $ BS.hPut port bs)
@@ -650,7 +667,7 @@ writeBuffer other _ =
 --
 --   Returns: Bool - True if file exists, false otherwise
 --
-fileExists :: (ReadRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+fileExists :: (MonadIO m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 fileExists [p@(Pointer _ _)] = recDerefPtrs p >>= box >>= fileExists
 fileExists [String filename] = do
     exists <- liftIO $ doesFileExist filename
@@ -666,7 +683,7 @@ fileExists args@(_ : _) = throwError $ NumArgs (Just 1) args
 --
 --   Returns: Bool - True if file was deleted, false if an error occurred
 --
-deleteFile :: (ReadRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+deleteFile :: (MonadIO m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 deleteFile [p@(Pointer _ _)] = recDerefPtrs p >>= box >>= deleteFile
 deleteFile [String filename] = do
     output <- liftIO $ try' (liftIO $ removeFile filename)
@@ -684,7 +701,7 @@ deleteFile args@(_ : _) = throwError $ NumArgs (Just 1) args
 --
 --   Returns: String - Actual text read from the file
 --
-readContents :: (ReadRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+readContents :: (MonadIO m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 readContents [String filename] = liftM String $ liftIO $ readFile filename
 readContents [p@(Pointer _ _)] = recDerefPtrs p >>= box >>= readContents
 readContents [] = throwError $ NumArgs (Just 1) []
@@ -696,9 +713,9 @@ readContents args@(_ : _) = throwError $ NumArgs (Just 1) args
 --
 --   * String - Filename to read
 --
---   Returns: [LispVal r] - Raw contents of the file parsed as scheme code
+--   Returns: [LispVal m r] - Raw contents of the file parsed as scheme code
 --
-load :: String -> IOThrowsError r [LispVal r]
+load :: MonadIO m => String -> IOThrowsError m r [LispVal m r]
 load filename = do
   result <- liftIO $ doesFileExist filename
   if result
@@ -721,7 +738,7 @@ load filename = do
 --
 --   Returns: List - Raw contents of the file parsed as scheme code
 --
-readAll :: (ReadRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+readAll :: (MonadIO m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 readAll [p@(Pointer _ _)] = recDerefPtrs p >>= box >>= readAll
 readAll [String filename] = liftM List $ load filename
 readAll [] = do -- read from stdin
@@ -731,10 +748,10 @@ readAll [] = do -- read from stdin
 readAll args@(_ : _) = throwError $ NumArgs (Just 1) args
 
 -- |Version of gensym that can be conveniently called from Haskell.
-_gensym :: String -> IOThrowsError r (LispVal r)
+_gensym :: MonadSerial m => String -> IOThrowsError m r (LispVal m r)
 _gensym prefix = do
-    u <- liftIO $ newUnique
-    return $ Atom $ prefix ++ (show $ Number $ toInteger $ hashUnique u)
+    u <- newSerial
+    return $ Atom $ prefix ++ (show $ Number u)
 
 -- |Generate a (reasonably) unique symbol, given an optional prefix.
 --  This function is provided even though it is not part of R5RS.
@@ -745,7 +762,7 @@ _gensym prefix = do
 --
 --   Returns: Atom
 --
-gensym :: (ReadRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+gensym :: (MonadSerial m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 gensym [p@(Pointer _ _)] = recDerefPtrs p >>= box >>= gensym
 gensym [String prefix] = _gensym prefix
 gensym [] = _gensym " g"
@@ -766,7 +783,7 @@ gensym args@(_ : _) = throwError $ NumArgs (Just 1) args
 --
 --   Returns: LispVal - First item in the list
 --
-car :: (ReadRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+car :: (ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 car [p@(Pointer _ _)] = derefPtr p >>= box >>= car
 car [List (x : _)] = return x
 car [DottedList (x : _) _] = return x
@@ -781,7 +798,7 @@ car badArgList = throwError $ NumArgs (Just 1) badArgList
 --
 --   Returns: List (or DottedList)
 --
-cdr :: (ReadRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+cdr :: (ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 cdr [p@(Pointer _ _)] = derefPtr p >>= box >>= cdr
 cdr [List (_ : xs)] = return $ List xs
 cdr [DottedList [_] x] = return x
@@ -799,7 +816,7 @@ cdr badArgList = throwError $ NumArgs (Just 1) badArgList
 --
 --   Returns: List (or DottedList) containing new value(s)
 --
-cons :: (ReadRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+cons :: (ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 cons [x, p@(Pointer _ _)] = do
   y <- derefPtr p
   cons [x, y]
@@ -817,7 +834,7 @@ cons badArgList = throwError $ NumArgs (Just 2) badArgList
 --   * LispVal - Object to fill the list with (optional)
 --
 --   Returns: List
-makeList :: [LispVal r] -> ThrowsError r (LispVal r)
+makeList :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 makeList [(Number n)] = makeList [Number n, List []]
 makeList [(Number n), a] = do
   let l = replicate (fromInteger n) a
@@ -832,7 +849,7 @@ makeList badArgList = throwError $ NumArgs (Just 1) badArgList
 --   * List
 --
 --   Returns: List
-listCopy :: (ReadRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+listCopy :: (ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 listCopy [p@(Pointer _ _)] = do
   l <- derefPtr p
   listCopy [l]
@@ -849,7 +866,7 @@ listCopy badArgList = throwError $ NumArgs (Just 1) badArgList
 --   * Number - Stop copying the vector at this element (optional)
 --
 --   Returns: Vector
-vectorCopy :: (ReadRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+vectorCopy :: (ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 vectorCopy (p@(Pointer _ _) : args) = do
   v <- derefPtr p
   vectorCopy (v : args)
@@ -870,7 +887,7 @@ vectorCopy badArgList = throwError $ NumArgs (Just 1) badArgList
 
 -- | Use pointer equality to compare two objects if possible, otherwise
 --   fall back to the normal equality comparison
-eq :: (ReadRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+eq :: (ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 eq [(Pointer pA envA), (Pointer pB envB)] = do
     return $ Bool $ (pA == pB) && ((bindings envA) == (bindings envB))
 --    if pA == pB 
@@ -891,7 +908,7 @@ eq args = recDerefToFnc eqv args
 --
 --   Returns: Bool - True if equal, false otherwise
 --
-equal :: [LispVal r] -> ThrowsError r (LispVal r)
+equal :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 equal [(Vector arg1), (Vector arg2)] = eqvList equal [List $ (elems arg1), List $ (elems arg2)]
 equal [l1@(List _), l2@(List _)] = eqvList equal [l1, l2]
 equal [(DottedList xs x), (DottedList ys y)] = equal [List $ xs ++ [x], List $ ys ++ [y]]
@@ -914,7 +931,7 @@ equal badArgList = throwError $ NumArgs (Just 2) badArgList
 --
 --   Returns: Vector
 --
-makeVector :: [LispVal r] -> ThrowsError r (LispVal r)
+makeVector :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 makeVector [(Number n)] = makeVector [Number n, List []]
 makeVector [(Number n), a] = do
   let l = replicate (fromInteger n) a
@@ -930,7 +947,7 @@ makeVector badArgList = throwError $ NumArgs (Just 1) badArgList
 --
 --   Returns: Vector
 --
-buildVector :: [LispVal r] -> ThrowsError r (LispVal r)
+buildVector :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 buildVector lst@(_ : _) = do
   return $ Vector $ (listArray (0, length lst - 1)) lst
 buildVector badArgList = throwError $ NumArgs (Just 1) badArgList
@@ -943,7 +960,7 @@ buildVector badArgList = throwError $ NumArgs (Just 1) badArgList
 --
 --   Returns: Number
 --
-vectorLength :: [LispVal r] -> ThrowsError r (LispVal r)
+vectorLength :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 vectorLength [(Vector v)] = return $ Number $ toInteger $ length (elems v)
 vectorLength [badType] = throwError $ TypeMismatch "vector" badType
 vectorLength badArgList = throwError $ NumArgs (Just 1) badArgList
@@ -958,7 +975,7 @@ vectorLength badArgList = throwError $ NumArgs (Just 1) badArgList
 --
 --   Returns: Object at the given index
 --
-vectorRef :: [LispVal r] -> ThrowsError r (LispVal r)
+vectorRef :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 vectorRef [(Vector v), (Number n)] = do
     let len = toInteger $ (length $ elems v) - 1
     if n > len || n < 0
@@ -975,7 +992,7 @@ vectorRef badArgList = throwError $ NumArgs (Just 2) badArgList
 --
 --   Returns: List
 --
-vectorToList :: [LispVal r] -> ThrowsError r (LispVal r)
+vectorToList :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 vectorToList [(Vector v)] = return $ List $ elems v
 vectorToList [badType] = throwError $ TypeMismatch "vector" badType
 vectorToList badArgList = throwError $ NumArgs (Just 1) badArgList
@@ -988,7 +1005,7 @@ vectorToList badArgList = throwError $ NumArgs (Just 1) badArgList
 --
 --   Returns: Vector
 --
-listToVector :: [LispVal r] -> ThrowsError r (LispVal r)
+listToVector :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 listToVector [(List l)] = return $ Vector $ (listArray (0, length l - 1)) l
 listToVector [badType] = throwError $ TypeMismatch "list" badType
 listToVector badArgList = throwError $ NumArgs (Just 1) badArgList
@@ -1005,7 +1022,7 @@ listToVector badArgList = throwError $ NumArgs (Just 1) badArgList
 --
 --   Returns: ByteVector - A new bytevector
 --
-makeByteVector :: [LispVal r] -> ThrowsError r (LispVal r)
+makeByteVector :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 makeByteVector [(Number n)] = do
   let ls = replicate (fromInteger n) (0 :: Word8)
   return $ ByteVector $ BS.pack ls
@@ -1023,14 +1040,14 @@ makeByteVector badArgList = throwError $ NumArgs (Just 2) badArgList
 --
 --   Returns: ByteVector - A new bytevector
 --
-byteVector :: [LispVal r] -> ThrowsError r (LispVal r)
+byteVector :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 byteVector bs = do
  return $ ByteVector $ BS.pack $ map conv bs
  where 
    conv (Number n) = fromInteger n :: Word8
    conv _ = 0 :: Word8
 
-byteVectorCopy :: ReadRef r IO => [LispVal r] -> IOThrowsError r (LispVal r)
+byteVectorCopy :: ReadRef r m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 
 -- | Create a copy of the given bytevector
 --
@@ -1071,9 +1088,9 @@ byteVectorCopy badArgList = throwError $ NumArgs (Just 1) badArgList
 --
 --   Returns: ByteVector - A new bytevector containing the values
 --
-byteVectorAppend :: forall r. ReadRef r IO => [LispVal r] -> IOThrowsError r (LispVal r)
+byteVectorAppend :: forall m r. ReadRef r m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 byteVectorAppend bs = do
-    let conv :: LispVal r -> IOThrowsError r BSU.ByteString
+    let conv :: LispVal m r -> IOThrowsError m r BSU.ByteString
         conv p@(Pointer _ _) = derefPtr p >>= conv
         conv (ByteVector bvs) = return bvs
         conv _ = return BS.empty
@@ -1089,7 +1106,7 @@ byteVectorAppend bs = do
 --
 --   Returns: Number - Length of the given bytevector
 --
-byteVectorLength :: ReadRef r IO => [LispVal r] -> IOThrowsError r (LispVal r)
+byteVectorLength :: ReadRef r m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 byteVectorLength [p@(Pointer _ _)] = derefPtr p >>= box >>= byteVectorLength
 byteVectorLength [(ByteVector bv)] = return $ Number $ toInteger $ BS.length bv
 byteVectorLength [badType] = throwError $ TypeMismatch "bytevector" badType
@@ -1105,7 +1122,7 @@ byteVectorLength badArgList = throwError $ NumArgs (Just 1) badArgList
 --
 --   Returns: Object at the index
 --
-byteVectorRef :: ReadRef r IO => [LispVal r] -> IOThrowsError r (LispVal r)
+byteVectorRef :: ReadRef r m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 byteVectorRef (p@(Pointer _ _) : lvs) = do
     bv <- derefPtr p
     byteVectorRef (bv : lvs)
@@ -1125,7 +1142,7 @@ byteVectorRef badArgList = throwError $ NumArgs (Just 2) badArgList
 --
 --   Returns: String
 --
-byteVectorUtf2Str :: ReadRef r IO => [LispVal r] -> IOThrowsError r (LispVal r)
+byteVectorUtf2Str :: ReadRef r m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 byteVectorUtf2Str [p@(Pointer _ _)] = derefPtr p >>= box >>= byteVectorUtf2Str
 byteVectorUtf2Str [(ByteVector bv)] = do
     return $ String $ BSU.toString bv 
@@ -1141,7 +1158,7 @@ byteVectorUtf2Str badArgList = throwError $ NumArgs (Just 1) badArgList
 --
 --   Returns: ByteVector
 --
-byteVectorStr2Utf :: ReadRef r IO => [LispVal r] -> IOThrowsError r (LispVal r)
+byteVectorStr2Utf :: ReadRef r m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 byteVectorStr2Utf [p@(Pointer _ _)] = derefPtr p >>= box >>= byteVectorStr2Utf
 byteVectorStr2Utf [(String s)] = do
     return $ ByteVector $ BSU.fromString s
@@ -1156,7 +1173,7 @@ byteVectorStr2Utf badArgList = throwError $ NumArgs (Just 1) badArgList
 --   dereferencing the leading object in the argument list if it is
 --   a pointer. This is a special hash-table specific function that will
 --   also dereference a hash table key if it is included.
-wrapHashTbl :: (ReadRef r IO, PtrEq r) => ([LispVal r] -> ThrowsError r (LispVal r)) -> [LispVal r] -> IOThrowsError r (LispVal r)
+wrapHashTbl :: (ReadRef r m, PtrEq m r) => ([LispVal m r] -> ThrowsError m r (LispVal m r)) -> [LispVal m r] -> IOThrowsError m r (LispVal m r)
 wrapHashTbl fnc [p@(Pointer _ _)] = do
   val <- derefPtr p
   liftThrows $ fnc [val]
@@ -1169,7 +1186,7 @@ wrapHashTbl fnc args = liftThrows $ fnc args
 -- | A helper function to allow a pure function to work with pointers, by
 --   dereferencing the leading object in the argument list if it is
 --   a pointer.
-wrapLeadObj :: ReadRef r IO => ([LispVal r] -> ThrowsError r (LispVal r)) -> [LispVal r] -> IOThrowsError r (LispVal r)
+wrapLeadObj :: ReadRef r m => ([LispVal m r] -> ThrowsError m r (LispVal m r)) -> [LispVal m r] -> IOThrowsError m r (LispVal m r)
 wrapLeadObj fnc [p@(Pointer _ _)] = do
   val <- derefPtr p
   liftThrows $ fnc [val]
@@ -1188,7 +1205,7 @@ wrapLeadObj fnc args = liftThrows $ fnc args
 --
 --   Returns: HashTable
 --
-hashTblMake :: [LispVal r] -> ThrowsError r (LispVal r)
+hashTblMake :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 hashTblMake _ = return $ HashTable $ Data.Map.fromList []
 
 -- | Determine if a given object is a hashtable
@@ -1199,7 +1216,7 @@ hashTblMake _ = return $ HashTable $ Data.Map.fromList []
 --
 --   Returns: Bool - True if arg was a hashtable, false otherwise
 --
-isHashTbl :: [LispVal r] -> ThrowsError r (LispVal r)
+isHashTbl :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 isHashTbl [(HashTable _)] = return $ Bool True
 isHashTbl _ = return $ Bool False
 
@@ -1213,7 +1230,7 @@ isHashTbl _ = return $ Bool False
 --
 --   Returns: Bool - True if found, False otherwise
 --
-hashTblExists :: [LispVal r] -> ThrowsError r (LispVal r)
+hashTblExists :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 hashTblExists [(HashTable ht), key] = do
   case Data.Map.lookup key ht of
     Just _ -> return $ Bool True
@@ -1232,7 +1249,7 @@ hashTblExists args@(_ : _) = throwError $ NumArgs (Just 2) args
 --
 --   Returns: Object containing the key's value
 --
-hashTblRef :: [LispVal r] -> ThrowsError r (LispVal r)
+hashTblRef :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 hashTblRef [(HashTable ht), key] = do
   case Data.Map.lookup key ht of
     Just val -> return val
@@ -1254,7 +1271,7 @@ hashTblRef badArgList = throwError $ NumArgs (Just 2) badArgList
 --
 --   Returns: Number - number of associations
 --
-hashTblSize :: [LispVal r] -> ThrowsError r (LispVal r)
+hashTblSize :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 hashTblSize [(HashTable ht)] = return $ Number $ toInteger $ Data.Map.size ht
 hashTblSize [badType] = throwError $ TypeMismatch "hash-table" badType
 hashTblSize badArgList = throwError $ NumArgs (Just 1) badArgList
@@ -1267,7 +1284,7 @@ hashTblSize badArgList = throwError $ NumArgs (Just 1) badArgList
 --
 --   Returns: List of (key, value) pairs
 --
-hashTbl2List :: [LispVal r] -> ThrowsError r (LispVal r)
+hashTbl2List :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 hashTbl2List [(HashTable ht)] = do
   return $ List $ map (\ (k, v) -> List [k, v]) $ Data.Map.toList ht
 hashTbl2List [badType] = throwError $ TypeMismatch "hash-table" badType
@@ -1281,7 +1298,7 @@ hashTbl2List badArgList = throwError $ NumArgs (Just 1) badArgList
 --
 --   Returns: List containing the keys
 --
-hashTblKeys :: [LispVal r] -> ThrowsError r (LispVal r)
+hashTblKeys :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 hashTblKeys [(HashTable ht)] = do
   return $ List $ map fst $ Data.Map.toList ht
 hashTblKeys [badType] = throwError $ TypeMismatch "hash-table" badType
@@ -1295,7 +1312,7 @@ hashTblKeys badArgList = throwError $ NumArgs (Just 1) badArgList
 --
 --   Returns: List containing the values
 --
-hashTblValues :: [LispVal r] -> ThrowsError r (LispVal r)
+hashTblValues :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 hashTblValues [(HashTable ht)] = do
   return $ List $ map snd $ Data.Map.toList ht
 hashTblValues [badType] = throwError $ TypeMismatch "hash-table" badType
@@ -1309,7 +1326,7 @@ hashTblValues badArgList = throwError $ NumArgs (Just 1) badArgList
 --
 --   Returns: HashTable
 --
-hashTblCopy :: [LispVal r] -> ThrowsError r (LispVal r)
+hashTblCopy :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 hashTblCopy [(HashTable ht)] = do
   return $ HashTable $ Data.Map.fromList $ Data.Map.toList ht
 hashTblCopy [badType] = throwError $ TypeMismatch "hash-table" badType
@@ -1325,7 +1342,7 @@ hashTblCopy badArgList = throwError $ NumArgs (Just 1) badArgList
 --
 --   Returns: String - new string built from given chars
 --
-buildString :: [LispVal r] -> ThrowsError r (LispVal r)
+buildString :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 buildString [(Char c)] = return $ String [c]
 buildString (Char c : rest) = do
   cs <- buildString rest
@@ -1346,13 +1363,13 @@ buildString badArgList = throwError $ NumArgs (Just 1) badArgList
 --
 --   Returns: String - new string
 --
-makeString :: [LispVal r] -> ThrowsError r (LispVal r)
+makeString :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 makeString [(Number n)] = return $ doMakeString n ' ' ""
 makeString [(Number n), (Char c)] = return $ doMakeString n c ""
 makeString badArgList = throwError $ NumArgs (Just 1) badArgList
 
 -- |Helper function
-doMakeString :: forall a r . (Num a, Eq a) => a -> Char -> String -> LispVal r
+doMakeString :: forall a m r . (Num a, Eq a) => a -> Char -> String -> LispVal m r
 doMakeString n char s =
     if n == 0
        then String s
@@ -1366,7 +1383,7 @@ doMakeString n char s =
 --
 --   Returns: Number - Length of the given string
 --
-stringLength :: ReadRef r IO => [LispVal r] -> IOThrowsError r (LispVal r)
+stringLength :: ReadRef r m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 stringLength [p@(Pointer _ _)] = derefPtr p  >>= box >>= stringLength
 stringLength [String s] = return $ Number $ foldr (const (+ 1)) 0 s -- Could probably do 'length s' instead...
 stringLength [badType] = throwError $ TypeMismatch "string" badType
@@ -1382,7 +1399,7 @@ stringLength badArgList = throwError $ NumArgs (Just 1) badArgList
 --
 --   Returns: Char
 --
-stringRef :: ReadRef r IO => [LispVal r] -> IOThrowsError r (LispVal r)
+stringRef :: ReadRef r m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 stringRef [p@(Pointer _ _), k@(Number _)] = do
     s <- derefPtr p 
     stringRef [s, k]
@@ -1406,7 +1423,7 @@ stringRef badArgList = throwError $ NumArgs (Just 2) badArgList
 --
 --   Returns: String - substring of the original string
 --
-substring :: ReadRef r IO => [LispVal r] -> IOThrowsError r (LispVal r)
+substring :: ReadRef r m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 substring (p@(Pointer _ _) : lvs) = do
   s <- derefPtr p
   substring (s : lvs)
@@ -1427,7 +1444,7 @@ substring badArgList = throwError $ NumArgs (Just 3) badArgList
 --
 --   Returns: Bool - True if strings are equal, false otherwise
 --
-stringCIEquals :: (ReadRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+stringCIEquals :: (ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 stringCIEquals args = do
   List dargs <- recDerefPtrs $ List args
   case dargs of
@@ -1443,7 +1460,7 @@ stringCIEquals args = do
           ciCmp s1 s2 (idx + 1))
 
 -- |Helper function
-stringCIBoolBinop :: (ReadRef r IO, PtrEq r) => (String -> String -> Bool) -> [LispVal r] -> IOThrowsError r (LispVal r)
+stringCIBoolBinop :: (ReadRef r m, PtrEq m r) => (String -> String -> Bool) -> [LispVal m r] -> IOThrowsError m r (LispVal m r)
 stringCIBoolBinop op args = do 
   List dargs <- recDerefPtrs $ List args -- Deref any pointers
   case dargs of
@@ -1454,7 +1471,7 @@ stringCIBoolBinop op args = do
   where strToLower = map toLower
 
 -- |Helper function
-charCIBoolBinop :: (Char -> Char -> Bool) -> [LispVal r] -> ThrowsError r (LispVal r)
+charCIBoolBinop :: (Char -> Char -> Bool) -> [LispVal m r] -> ThrowsError m r (LispVal m r)
 charCIBoolBinop op [(Char s1), (Char s2)] = boolBinop unpackChar op [(Char $ toLower s1), (Char $ toLower s2)]
 charCIBoolBinop _ [badType] = throwError $ TypeMismatch "character character" badType
 charCIBoolBinop _ badArgList = throwError $ NumArgs (Just 2) badArgList
@@ -1467,7 +1484,7 @@ charCIBoolBinop _ badArgList = throwError $ NumArgs (Just 2) badArgList
 --
 --   Returns: String - all given strings appended together as a single string
 --
-stringAppend :: ReadRef r IO => [LispVal r] -> IOThrowsError r (LispVal r)
+stringAppend :: ReadRef r m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 stringAppend (p@(Pointer _ _) : lvs) = do
   s <- derefPtr p
   stringAppend (s : lvs)
@@ -1491,7 +1508,7 @@ stringAppend badArgList = throwError $ NumArgs (Just 1) badArgList
 --
 --   Returns: Numeric type, actual type will depend upon given string
 --
-stringToNumber :: ReadRef r IO => [LispVal r] -> IOThrowsError r (LispVal r)
+stringToNumber :: ReadRef r m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 stringToNumber (p@(Pointer _ _) : lvs) = do
   s <- derefPtr p
   stringToNumber (s : lvs)
@@ -1521,7 +1538,7 @@ stringToNumber badArgList = throwError $ NumArgs (Just 1) badArgList
 --
 --   Returns: List - list of characters
 --
-stringToList :: ReadRef r IO => [LispVal r] -> IOThrowsError r (LispVal r)
+stringToList :: ReadRef r m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 stringToList (p@(Pointer _ _) : ps) = do
     p' <- derefPtr p 
     stringToList (p' : ps)
@@ -1550,7 +1567,7 @@ trimStartEnd start end ls =
 --
 --   Returns: String - Resulting string
 --
-listToString :: ReadRef r IO => [LispVal r] -> IOThrowsError r (LispVal r)
+listToString :: ReadRef r m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 listToString [p@(Pointer _ _)] = derefPtr p >>= box >>= listToString
 listToString [(List [])] = return $ String ""
 listToString [(List l)] = liftThrows $ buildString l
@@ -1565,7 +1582,7 @@ listToString args@(_ : _) = throwError $ NumArgs (Just 1) args
 --   * String
 --
 --   Returns: Vector
-stringToVector :: ReadRef r IO => [LispVal r] -> IOThrowsError r (LispVal r)
+stringToVector :: ReadRef r m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 stringToVector args = do
     List l <- stringToList args
     return $ Vector $ listArray (0, length l - 1) l
@@ -1577,7 +1594,7 @@ stringToVector args = do
 --   * Vector
 --
 --   Returns: String
-vectorToString :: ReadRef r IO => [LispVal r] -> IOThrowsError r (LispVal r)
+vectorToString :: ReadRef r m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 vectorToString (p@(Pointer _ _) : ps) = do
     p' <- derefPtr p
     vectorToString (p' : ps)
@@ -1602,7 +1619,7 @@ vectorToString args@(_ : _) = throwError $ NumArgs (Just 1) args
 --
 --   Returns: String - New copy of the given string
 --
-stringCopy :: ReadRef r IO => [LispVal r] -> IOThrowsError r (LispVal r)
+stringCopy :: ReadRef r m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 stringCopy (p@(Pointer _ _) : args) = do
     s <- derefPtr p 
     stringCopy (s : args)
@@ -1622,7 +1639,7 @@ stringCopy badArgList = throwError $ NumArgs (Just 2) badArgList
 --
 --   Returns: Bool - True if improper list, False otherwise
 --
-isDottedList :: ReadRef r IO => [LispVal r] -> IOThrowsError r (LispVal r)
+isDottedList :: ReadRef r m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 isDottedList ([p@(Pointer _ _)]) = derefPtr p >>= box >>= isDottedList
 isDottedList ([DottedList _ _]) = return $ Bool True
 -- Must include lists as well since they are made up of /chains/ of pairs
@@ -1638,7 +1655,7 @@ isDottedList _ = return $ Bool False
 --
 --   Returns: Bool - True if procedure, False otherwise
 --
-isProcedure :: [LispVal r] -> ThrowsError r (LispVal r)
+isProcedure :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 isProcedure ([Continuation {}]) = return $ Bool True
 isProcedure ([PrimitiveFunc _]) = return $ Bool True
 isProcedure ([Func {}]) = return $ Bool True
@@ -1656,7 +1673,7 @@ isProcedure _ = return $ Bool False
 --
 --   Returns: Bool - True if vector, False otherwise
 --
-isVector :: ReadRef r IO => LispVal r -> IOThrowsError r (LispVal r)
+isVector :: ReadRef r m => LispVal m r -> IOThrowsError m r (LispVal m r)
 isVector p@(Pointer _ _) = derefPtr p >>= isVector
 isVector (Vector vs) = do
     case elems vs of
@@ -1673,7 +1690,7 @@ isVector _ = return $ Bool False
 --
 --   Returns: Bool - True if record, False otherwise
 --
-isRecord :: ReadRef r IO => LispVal r -> IOThrowsError r (LispVal r)
+isRecord :: ReadRef r m => LispVal m r -> IOThrowsError m r (LispVal m r)
 isRecord p@(Pointer _ _) = derefPtr p >>= isRecord
 isRecord (Vector vs) = do
     case (elems vs) of
@@ -1690,7 +1707,7 @@ isRecord _ = return $ Bool False
 --
 --   Returns: Bool - True if bytevector, False otherwise
 --
-isByteVector :: ReadRef r IO => LispVal r -> IOThrowsError r (LispVal r)
+isByteVector :: ReadRef r m => LispVal m r -> IOThrowsError m r (LispVal m r)
 isByteVector p@(Pointer _ _) = derefPtr p >>= isVector
 isByteVector (ByteVector _) = return $ Bool True
 isByteVector _ = return $ Bool False
@@ -1703,7 +1720,7 @@ isByteVector _ = return $ Bool False
 --
 --   Returns: Bool - True if list, False otherwise
 --
-isList :: ReadRef r IO => LispVal r -> IOThrowsError r (LispVal r)
+isList :: ReadRef r m => LispVal m r -> IOThrowsError m r (LispVal m r)
 isList p@(Pointer _ _) = derefPtr p >>= isList
 isList (List _) = return $ Bool True
 isList _ = return $ Bool False
@@ -1716,7 +1733,7 @@ isList _ = return $ Bool False
 --
 --   Returns: Bool - True if null list, False otherwise
 --
-isNull :: ReadRef r IO => [LispVal r] -> IOThrowsError r (LispVal r)
+isNull :: ReadRef r m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 isNull ([p@(Pointer _ _)]) = derefPtr p >>= box >>= isNull
 isNull ([List []]) = return $ Bool True
 isNull _ = return $ Bool False
@@ -1729,12 +1746,12 @@ isNull _ = return $ Bool False
 --
 --   Returns: Bool - True if EOF, False otherwise
 --
-isEOFObject :: [LispVal r] -> ThrowsError r (LispVal r)
+isEOFObject :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 isEOFObject ([EOF]) = return $ Bool True
 isEOFObject _ = return $ Bool False
 
 -- | Return the EOF object
-eofObject :: [LispVal r] -> ThrowsError r (LispVal r)
+eofObject :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 eofObject _ = return $ EOF
 
 -- | Determine if given object is a symbol
@@ -1745,7 +1762,7 @@ eofObject _ = return $ EOF
 --
 --   Returns: Bool - True if a symbol, False otherwise
 --
-isSymbol :: [LispVal r] -> ThrowsError r (LispVal r)
+isSymbol :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 isSymbol ([Atom _]) = return $ Bool True
 isSymbol _ = return $ Bool False
 
@@ -1757,7 +1774,7 @@ isSymbol _ = return $ Bool False
 --
 --   Returns: String
 --
-symbol2String :: [LispVal r] -> ThrowsError r (LispVal r)
+symbol2String :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 symbol2String ([Atom a]) = return $ String a
 symbol2String [notAtom] = throwError $ TypeMismatch "symbol" notAtom
 symbol2String [] = throwError $ NumArgs (Just 1) []
@@ -1771,7 +1788,7 @@ symbol2String args@(_ : _) = throwError $ NumArgs (Just 1) args
 --
 --   Returns: Atom
 --
-string2Symbol :: ReadRef r IO => [LispVal r] -> IOThrowsError r (LispVal r)
+string2Symbol :: ReadRef r m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 string2Symbol ([p@(Pointer _ _)]) = derefPtr p >>= box >>= string2Symbol
 string2Symbol ([String s]) = return $ Atom s
 string2Symbol [] = throwError $ NumArgs (Just 1) []
@@ -1786,7 +1803,7 @@ string2Symbol args@(_ : _) = throwError $ NumArgs (Just 1) args
 --
 --   Returns: Char - Character in uppercase
 --
-charUpper :: [LispVal r] -> ThrowsError r (LispVal r)
+charUpper :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 charUpper [Char c] = return $ Char $ toUpper c
 charUpper [notChar] = throwError $ TypeMismatch "char" notChar
 charUpper args = throwError $ NumArgs (Just 1) args
@@ -1799,7 +1816,7 @@ charUpper args = throwError $ NumArgs (Just 1) args
 --
 --   Returns: Char - Character in lowercase
 --
-charLower :: [LispVal r] -> ThrowsError r (LispVal r)
+charLower :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 charLower [Char c] = return $ Char $ toLower c
 charLower [notChar] = throwError $ TypeMismatch "char" notChar
 charLower args = throwError $ NumArgs (Just 1) args
@@ -1811,7 +1828,7 @@ charLower args = throwError $ NumArgs (Just 1) args
 --   * Char
 --
 --   Returns: Number, or False
-charDigitValue :: [LispVal r] -> ThrowsError r (LispVal r)
+charDigitValue :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 charDigitValue [Char c] = do
     -- This is not really good enough, since unicode chars
     -- are supposed to be processed, and r7rs does not
@@ -1830,7 +1847,7 @@ charDigitValue args = throwError $ NumArgs (Just 1) args
 --
 --   Returns: Number
 --
-char2Int :: [LispVal r] -> ThrowsError r (LispVal r)
+char2Int :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 char2Int [Char c] = return $ Number $ toInteger $ ord c 
 char2Int [notChar] = throwError $ TypeMismatch "char" notChar
 char2Int args = throwError $ NumArgs (Just 1) args
@@ -1843,13 +1860,13 @@ char2Int args = throwError $ NumArgs (Just 1) args
 --
 --   Returns: Char
 --
-int2Char :: [LispVal r] -> ThrowsError r (LispVal r)
+int2Char :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 int2Char [Number n] = return $ Char $ chr $ fromInteger n 
 int2Char [notInt] = throwError $ TypeMismatch "integer" notInt
 int2Char args = throwError $ NumArgs (Just 1) args
 
 -- |Determine if given character satisfies the given predicate
-charPredicate :: (Char -> Bool) -> [LispVal r] -> ThrowsError r (LispVal r)
+charPredicate :: (Char -> Bool) -> [LispVal m r] -> ThrowsError m r (LispVal m r)
 charPredicate cpred ([Char c]) = return $ Bool $ cpred c 
 charPredicate _ _ = return $ Bool False
 
@@ -1857,11 +1874,11 @@ charPredicate _ _ = return $ Bool False
 --
 --   Arguments:
 --
---   * LispVal r to check
+--   * LispVal m r to check
 --
 --   Returns: Bool - True if the argument is a character, False otherwise
 --
-isChar :: [LispVal r] -> ThrowsError r (LispVal r)
+isChar :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 isChar ([Char _]) = return $ Bool True
 isChar _ = return $ Bool False
 
@@ -1869,11 +1886,11 @@ isChar _ = return $ Bool False
 --
 --   Arguments:
 --
---   * LispVal r to check
+--   * LispVal m r to check
 --
 --   Returns: Bool - True if the argument is a string, False otherwise
 --
-isString :: ReadRef r IO => [LispVal r] -> IOThrowsError r (LispVal r)
+isString :: ReadRef r m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 isString [p@(Pointer _ _)] = derefPtr p >>= box >>= isString
 isString ([String _]) = return $ Bool True
 isString _ = return $ Bool False
@@ -1882,11 +1899,11 @@ isString _ = return $ Bool False
 --
 --   Arguments:
 --
---   * LispVal r to check
+--   * LispVal m r to check
 --
 --   Returns: Bool - True if the argument is a boolean, False otherwise
 --
-isBoolean :: [LispVal r] -> ThrowsError r (LispVal r)
+isBoolean :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 isBoolean ([Bool _]) = return $ Bool True
 isBoolean _ = return $ Bool False
 
@@ -1897,12 +1914,12 @@ isBoolean _ = return $ Bool False
 --   * A list of Bool values
 --
 --   Returns: True if the list contains booleans that are the same, False otherwise
-isBooleanEq :: Monad m => [LispVal r] -> m (LispVal r)
+isBooleanEq :: [LispVal m r] -> LispVal m r
 isBooleanEq (Bool a : Bool b : bs)
     | a == b = isBooleanEq (Bool b : bs)
-    | otherwise = return $ Bool False
-isBooleanEq [Bool _] = return $ Bool True
-isBooleanEq _ = return $ Bool False
+    | otherwise = Bool False
+isBooleanEq [Bool _] = Bool True
+isBooleanEq _ = Bool False
 
 -- | Determine if multiple symbols values are the same
 --
@@ -1911,18 +1928,18 @@ isBooleanEq _ = return $ Bool False
 --   * A list of Atom values
 --
 --   Returns: True if all of the symbols are the same, False otherwise
-isSymbolEq :: Monad m => [LispVal r] -> m (LispVal r)
+isSymbolEq :: [LispVal m r] -> LispVal m r
 isSymbolEq (Atom a : Atom b : bs)
     | a == b = isSymbolEq (Atom b : bs)
-    | otherwise = return $ Bool False
-isSymbolEq [Atom _] = return $ Bool True
-isSymbolEq _ = return $ Bool False
+    | otherwise = Bool False
+isSymbolEq [Atom _] = Bool True
+isSymbolEq _ = Bool False
 
 -- |Utility type for unpackEquals
-data Unpacker r = forall a . Eq a => AnyUnpacker (LispVal r -> ThrowsError r a)
+data Unpacker m r = forall a . Eq a => AnyUnpacker (LispVal m r -> ThrowsError m r a)
 
 -- |Determine if two lispval's are equal
-unpackEquals :: LispVal r -> LispVal r -> Unpacker r -> ThrowsError r Bool
+unpackEquals :: LispVal m r -> LispVal m r -> Unpacker m r -> ThrowsError m r Bool
 unpackEquals arg1 arg2 (AnyUnpacker unpacker) =
   do unpacked1 <- unpacker arg1
      unpacked2 <- unpacker arg2
@@ -1930,7 +1947,7 @@ unpackEquals arg1 arg2 (AnyUnpacker unpacker) =
   `catchError` (const $ return False)
 
 -- |Helper function to perform a binary logic operation on two LispVal arguments.
-boolBinop :: (LispVal r -> ThrowsError r a) -> (a -> a -> Bool) -> [LispVal r] -> ThrowsError r (LispVal r)
+boolBinop :: (LispVal m r -> ThrowsError m r a) -> (a -> a -> Bool) -> [LispVal m r] -> ThrowsError m r (LispVal m r)
 boolBinop unpacker op args = if length args < 2
                              then throwError $ NumArgs (Just 2) args
                              else do
@@ -1948,30 +1965,30 @@ boolBinop unpacker op args = if length args < 2
        
 
 -- |Perform the given function against a single LispVal argument
-unaryOp :: (LispVal r -> ThrowsError r (LispVal r)) -> [LispVal r] -> ThrowsError r (LispVal r)
+unaryOp :: (LispVal m r -> ThrowsError m r (LispVal m r)) -> [LispVal m r] -> ThrowsError m r (LispVal m r)
 unaryOp f [v] = f v
 unaryOp _ [] = throwError $ NumArgs (Just 1) []
 unaryOp _ args@(_ : _) = throwError $ NumArgs (Just 1) args
 
 -- |Same as unaryOp but in the IO monad
-unaryOp' :: (LispVal r -> IOThrowsError r (LispVal r)) -> [LispVal r] -> IOThrowsError r (LispVal r)
+unaryOp' :: Monad m => (LispVal m r -> IOThrowsError m r (LispVal m r)) -> [LispVal m r] -> IOThrowsError m r (LispVal m r)
 unaryOp' f [v] = f v
 unaryOp' _ [] = throwError $ NumArgs (Just 1) []
 unaryOp' _ args@(_ : _) = throwError $ NumArgs (Just 1) args
 
 -- |Perform boolBinop against two string arguments
-strBoolBinop :: (ReadRef r IO, PtrEq r) => (String -> String -> Bool) -> [LispVal r] -> IOThrowsError r (LispVal r)
+strBoolBinop :: (ReadRef r m, PtrEq m r) => (String -> String -> Bool) -> [LispVal m r] -> IOThrowsError m r (LispVal m r)
 strBoolBinop fnc args = do
   List dargs <- recDerefPtrs $ List args -- Deref any pointers
   liftThrows $ boolBinop unpackStr fnc dargs
 
 -- |Perform boolBinop against two char arguments
 charBoolBinop :: (Char -> Char -> Bool)
-              -> [LispVal r] -> ThrowsError r (LispVal r)
+              -> [LispVal m r] -> ThrowsError m r (LispVal m r)
 charBoolBinop = boolBinop unpackChar
 
 -- |Perform boolBinop against two boolean arguments
-boolBoolBinop :: (Bool -> Bool -> Bool) -> [LispVal r] -> ThrowsError r (LispVal r)
+boolBoolBinop :: (Bool -> Bool -> Bool) -> [LispVal m r] -> ThrowsError m r (LispVal m r)
 boolBoolBinop = boolBinop unpackBool
 
 -- | Unpack a LispVal char
@@ -1980,7 +1997,7 @@ boolBoolBinop = boolBinop unpackBool
 --
 --   * Char - Character to unpack
 --
-unpackChar :: LispVal r -> ThrowsError r Char
+unpackChar :: LispVal m r -> ThrowsError m r Char
 unpackChar (Char c) = return c
 unpackChar notChar = throwError $ TypeMismatch "character" notChar
 
@@ -1990,7 +2007,7 @@ unpackChar notChar = throwError $ TypeMismatch "character" notChar
 --
 --   * String - String to unpack
 --
-unpackStr :: LispVal r -> ThrowsError r String
+unpackStr :: LispVal m r -> ThrowsError m r String
 unpackStr (String s) = return s
 unpackStr (Number s) = return $ show s
 unpackStr (Bool s) = return $ show s
@@ -2002,7 +2019,7 @@ unpackStr notString = throwError $ TypeMismatch "string" notString
 --
 --   * Bool - Boolean to unpack
 --
-unpackBool :: LispVal r -> ThrowsError r Bool
+unpackBool :: LispVal m r -> ThrowsError m r Bool
 unpackBool (Bool b) = return b
 unpackBool notBool = throwError $ TypeMismatch "boolean" notBool
 
@@ -2011,7 +2028,7 @@ unpackBool notBool = throwError $ TypeMismatch "boolean" notBool
 --   Arguments: (None)
 --
 --   Returns: Current UNIX timestamp in seconds
-currentTimestamp :: [LispVal r] -> IOThrowsError r (LispVal r)
+currentTimestamp :: MonadIO m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 currentTimestamp _ = do
     cur <- liftIO $ Data.Time.Clock.POSIX.getPOSIXTime
     return $ Float $ realToFrac cur
@@ -2024,7 +2041,7 @@ currentTimestamp _ = do
 --
 --   Returns: Integer - program return status
 --
-system :: [LispVal r] -> IOThrowsError r (LispVal r)
+system :: MonadIO m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 system [String cmd] = do
     result <- liftIO $ System.Process.system cmd
     case result of
@@ -2038,13 +2055,13 @@ system err = throwError $ TypeMismatch "string" $ List err
 --
 --   Returns: List - list of key/value alists
 --
-getEnvVars :: [LispVal r] -> IOThrowsError r (LispVal r)
+getEnvVars :: MonadIO m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 getEnvVars _ = do
     vars <- liftIO $ SE.getEnvironment
     return $ List $ map (\ (k, v) -> DottedList [String k] (String v)) vars
 
 -- FUTURE (?):
--- systemRead :: [LispVal r] -> IOThrowsError r (LispVal r)
+-- systemRead :: [LispVal m r] -> IOThrowsError m r (LispVal m r)
 -- systemRead ((String cmd) : args) = do
 --   let args' = map conv args
 --   result <- liftIO $ readProcess cmd args' ""

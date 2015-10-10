@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE RankNTypes #-}
 {- |
 Module      : Language.Scheme.Libraries
 Copyright   : Justin Ethier
@@ -24,9 +25,9 @@ import Control.Monad.Except
 
 -- |Get the full path to a module file
 findModuleFile 
-    :: (ReadRef r IO, PtrEq r)
-    => [LispVal r]
-    -> IOThrowsError r (LispVal r)
+    :: (ReadRef r m, PtrEq m r)
+    => [LispVal m r]
+    -> IOThrowsError m r (LispVal m r)
 findModuleFile [p@(Pointer _ _)] = recDerefPtrs p >>= box >>= findModuleFile
 findModuleFile [String file] = do
     -- Good enough now that load searches @lib@ if file not found
@@ -35,11 +36,11 @@ findModuleFile _ = return $ Bool False
 
 -- |Import definitions from one environment into another
 moduleImport 
-    :: (ReadRef r IO, WriteRef r IO, NewRef r IO)
-    => Env r  -- ^ Environment to import into
-    -> Env r  -- ^ Environment to import from
-    -> [LispVal r] -- ^ Identifiers to import
-    -> IOThrowsError r (LispVal r)
+    :: (ReadRef r m, WriteRef r m, NewRef r m)
+    => Env m r  -- ^ Environment to import into
+    -> Env m r  -- ^ Environment to import from
+    -> [LispVal m r] -- ^ Identifiers to import
+    -> IOThrowsError m r (LispVal m r)
 moduleImport to from (p@(Pointer _ _) : is) = do
   i <- derefPtr p
   moduleImport to from (i : is)
@@ -56,16 +57,16 @@ moduleImport _ _ err = do
 
 -- |Copy a binding from one env to another
 divertBinding
-    :: (ReadRef r IO, WriteRef r IO, NewRef r IO)
-    => Env r  -- ^ Environment to import into
-    -> Env r  -- ^ Environment to import from
+    :: (ReadRef r m, WriteRef r m, NewRef r m)
+    => Env m r  -- ^ Environment to import into
+    -> Env m r  -- ^ Environment to import from
     -> String -- ^ Name of the binding in @from@
     -> String -- ^ Name to use for the binding in @to@
-    -> IOThrowsError r (LispVal r)
+    -> IOThrowsError m r (LispVal m r)
 divertBinding to from nameOrig nameNew = do
-  isMacroBound <- liftIO $ isNamespacedRecBound from macroNamespace nameOrig
-  namespace <- liftIO $ if isMacroBound then return macroNamespace
-                                        else return varNamespace
+  isMacroBound <- lift $ isNamespacedRecBound from macroNamespace nameOrig
+  namespace <- lift $ if isMacroBound then return macroNamespace
+                                      else return varNamespace
   m <- getNamespacedVar from namespace nameOrig
   defineNamespacedVar to namespace nameNew m
 

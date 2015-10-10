@@ -64,7 +64,7 @@ import qualified Data.List
 import Data.Maybe (fromMaybe)
 
 -- |Perform one-time initialization of the compiler's environment
-initializeCompiler :: (ReadRef r IO, WriteRef r IO, NewRef r IO) => Env r -> IOThrowsError r [HaskAST]
+initializeCompiler :: (ReadRef r m, WriteRef r m, NewRef r m) => Env m r -> IOThrowsError m r [HaskAST]
 initializeCompiler env = do
   -- Define imports var here as an empty list.
   -- This list is appended to by (load-ffi) instances,
@@ -74,12 +74,12 @@ initializeCompiler env = do
 
 -- | Compile a file containing scheme code
 compileLisp 
-    :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r)
-    => Env r  -- ^ Compiler environment 
+    :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r)
+    => Env m r  -- ^ Compiler environment 
     -> String -- ^ Filename
     -> String -- ^ Function entry point (code calls into this function)
     -> Maybe String -- ^ Function exit point, if any
-    -> IOThrowsError r [HaskAST]
+    -> IOThrowsError m r [HaskAST]
 compileLisp env filename entryPoint exitPoint = do
     filename' <- LSC.findFileOrLib filename 
     ast <- load filename' >>= compileBlock entryPoint exitPoint env []
@@ -90,14 +90,14 @@ compileLisp env filename entryPoint exitPoint = do
         _ -> return ast
 
 -- |Compile a list (block) of Scheme code
-compileBlock :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => String -> Maybe String -> Env r -> [HaskAST] -> [LispVal r] 
-             -> IOThrowsError r [HaskAST]
+compileBlock :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => String -> Maybe String -> Env m r -> [HaskAST] -> [LispVal m r] 
+             -> IOThrowsError m r [HaskAST]
 compileBlock symThisFunc symLastFunc env result lisps = do
   _ <- defineTopLevelVars env lisps
   _compileBlock symThisFunc symLastFunc env result lisps
 
-_compileBlock :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => String -> Maybe String -> Env r -> [HaskAST] -> [LispVal r]
-              -> IOThrowsError r [HaskAST]
+_compileBlock :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => String -> Maybe String -> Env m r -> [HaskAST] -> [LispVal m r]
+              -> IOThrowsError m r [HaskAST]
 _compileBlock symThisFunc symLastFunc env result [c] = do
   let copts = CompileOptions symThisFunc False False symLastFunc 
   compiled <- mcompile env c copts
@@ -143,8 +143,8 @@ _compileBlock symThisFunc symLastFunc env result (c:cs) = do
     compiled
 _compileBlock _ _ _ result [] = return result
 
-_compileBlockDo :: ([HaskAST] -> IOThrowsError r [HaskAST]) -> 
-                   [HaskAST] -> [HaskAST] -> IOThrowsError r [HaskAST]
+_compileBlockDo :: ([HaskAST] -> IOThrowsError m r [HaskAST]) -> 
+                   [HaskAST] -> [HaskAST] -> IOThrowsError m r [HaskAST]
 _compileBlockDo fnc result c =
   case c of
     -- Discard a value by itself
@@ -155,13 +155,13 @@ _compileBlockDo fnc result c =
 -- TODO: could everything just be regular function calls except when a continuation is 'added to the stack' via a makeCPS(makeCPSWArgs ...) ?? I think this could be made more efficient
 
 -- |Helper function to compile expressions consisting of a scalar
-compileScalar :: String -> CompOpts -> IOThrowsError r [HaskAST]
+compileScalar :: Monad m => String -> CompOpts -> IOThrowsError m r [HaskAST]
 compileScalar val copts = do 
   f <- return $ AstAssignM "x1" $ AstValue val 
   c <- return $ createAstCont copts "x1" ""
   return [createAstFunc copts [f, c]]
 
-compileScalar' :: HaskAST -> CompOpts -> IOThrowsError r [HaskAST]
+compileScalar' :: Monad m => HaskAST -> CompOpts -> IOThrowsError m r [HaskAST]
 compileScalar' val copts = do 
   let fCode = case val of
           AstValue v -> AstValue $ "  let x1 = " ++ v 
@@ -173,7 +173,7 @@ compileScalar' val copts = do
   return [createAstFunc copts [f, c]]
 
 -- |Compile the list of arguments for a function
-compileLambdaList :: [LispVal r] -> IOThrowsError r String
+compileLambdaList :: Monad m => [LispVal m r] -> IOThrowsError m r String
 compileLambdaList l = do
   serialized <- mapM serialize l 
   return $ "[" ++ Data.List.intercalate "," serialized ++ "]"
@@ -182,7 +182,7 @@ compileLambdaList l = do
                          "invalid parameter to lambda list: " ++ show a
 
 -- |Add lambda variables to the compiler's environment
-defineLambdaVars :: (ReadRef r IO, WriteRef r IO, NewRef r IO) => Env r -> [LispVal r] -> IOThrowsError r (LispVal r)
+defineLambdaVars :: (ReadRef r m, WriteRef r m, NewRef r m) => Env m r -> [LispVal m r] -> IOThrowsError m r (LispVal m r)
 defineLambdaVars env (Atom v : vs) = do
     _ <- defineVar env v $ Number 0 -- For now, actual value does not matter
     defineLambdaVars env vs
@@ -193,7 +193,7 @@ defineLambdaVars _ [] = return $ Nil ""
 --  the environment. This allows the compiler validation to work even 
 --  though a variable is used in a sub-form before it is defined further
 --  on down in the program
-defineTopLevelVars :: (ReadRef r IO, WriteRef r IO, NewRef r IO) => Env r -> [LispVal r] -> IOThrowsError r (LispVal r)
+defineTopLevelVars :: (ReadRef r m, WriteRef r m, NewRef r m) => Env m r -> [LispVal m r] -> IOThrowsError m r (LispVal m r)
 defineTopLevelVars env (List [Atom "define", Atom var, _] : ls) = do
     _ <- defineTopLevelVar env var
     defineTopLevelVars env ls
@@ -206,14 +206,14 @@ defineTopLevelVars env ((List (Atom "define" : DottedList (Atom var : _) _ : _))
 defineTopLevelVars env (_ : ls) = defineTopLevelVars env ls
 defineTopLevelVars _ _ = return nullLisp 
 
-defineTopLevelVar :: (ReadRef r IO, WriteRef r IO, NewRef r IO) => Env r -> String -> IOThrowsError r (LispVal r)
+defineTopLevelVar :: (ReadRef r m, WriteRef r m, NewRef r m) => Env m r -> String -> IOThrowsError m r (LispVal m r)
 defineTopLevelVar env var = do
   defineVar env var $ Number 0 -- Actual value not loaded at the moment 
 
 -- |Compile a Lisp expression to Haskell. Note this function does
 --  not expand macros; mcompile should be used instead if macros
 --  may appear in the expression.
-compile :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => Env r -> LispVal r -> CompOpts -> IOThrowsError r [HaskAST]
+compile :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> LispVal m r -> CompOpts -> IOThrowsError m r [HaskAST]
 -- Experimenting with r7rs library support
 compile env 
         (List (Atom "import" : mods)) 
@@ -236,7 +236,7 @@ compile _ v@(Vector _) _         = return [AstValue $ ast2Str v]
 compile _ v@(ByteVector _) _     = return [AstValue $ ast2Str v]
 compile _ ht@(HashTable _) _     = return [AstValue $ ast2Str ht]
 compile env (Atom a) _ = do
- isDefined <- liftIO $ isRecBound env a
+ isDefined <- lift $ isRecBound env a
  case isDefined of
    True -> do
 -- TODO: this is not good enough, will probably have to 
@@ -255,7 +255,7 @@ compile env ast@(List [Atom "expand",  _body]) copts = do
 compile env ast@(List (Atom "let-syntax" : List _bindings : _body)) 
         copts@(CompileOptions thisFnc a b nextFnc) = do
   compileSpecialFormBody env ast copts (\ _ -> do
-    bodyEnv <- liftIO $ extendEnv env []
+    bodyEnv <- lift $ extendEnv env []
     _ <- Language.Scheme.Macro.loadMacros env bodyEnv Nothing False _bindings
     -- Expand whole body as a single continuous macro, to ensure hygiene
     expanded <- Language.Scheme.Macro.expand bodyEnv False (List _body) LSC.apply
@@ -274,7 +274,7 @@ compile env ast@(List (Atom "let-syntax" : List _bindings : _body))
 compile env ast@(List (Atom "letrec-syntax" : List _bindings : _body))
         copts@(CompileOptions thisFnc a b nextFnc) = do
   compileSpecialFormBody env ast copts (\ _ -> do
-    bodyEnv <- liftIO $ extendEnv env []
+    bodyEnv <- lift $ extendEnv env []
     _ <- Language.Scheme.Macro.loadMacros bodyEnv bodyEnv Nothing False _bindings
     -- Expand whole body as a single continuous macro, to ensure hygiene
     expanded <- Language.Scheme.Macro.expand bodyEnv False (List _body) LSC.apply
@@ -322,7 +322,7 @@ compile env ast@(List [Atom "define-syntax", Atom keyword,
     let fparamsStr = asts2Str fparams
         fbodyStr = asts2Str fbody
   
-    f <- makeNormalFunc env fparams fbody 
+    f <- lift $ makeNormalFunc env fparams fbody 
     _ <- defineNamespacedVar env macroNamespace keyword $ SyntaxExplicitRenaming f
   
     compFunc <- return $ [
@@ -481,7 +481,7 @@ compile env ast@(List (Atom "define" : List (Atom var : fparams) : fbody))
         copts@(CompileOptions {}) = do
   _ <- validateFuncParams fparams Nothing
   compileSpecialFormBody env ast copts (\ _ -> do
-    bodyEnv <- liftIO $ extendEnv env []
+    bodyEnv <- lift $ extendEnv env []
     -- bind lambda params in the extended env
     _ <- defineLambdaVars bodyEnv (Atom var : fparams)
    
@@ -492,7 +492,7 @@ compile env ast@(List (Atom "define" : List (Atom var : fparams) : fbody))
     -- Cache macro expansions within function body
     ebody <- mapM (\ lisp -> Language.Scheme.Macro.macroEval env lisp LSC.apply) fbody
     -- Store var in huskc's env for macro processing (and same for other vers of define)
-    _ <- makeNormalFunc env fparams ebody >>= defineVar env var
+    _ <- lift (makeNormalFunc env fparams ebody) >>= defineVar env var
    
     -- Entry point; ensure var is not rebound
     f <- return $ [
@@ -508,7 +508,7 @@ compile env
         copts@(CompileOptions {}) = do
   _ <- validateFuncParams (fparams ++ [varargs]) Nothing
   compileSpecialFormBody env ast copts (\ _ -> do
-    bodyEnv <- liftIO $ extendEnv env []
+    bodyEnv <- lift $ extendEnv env []
     -- bind lambda params in the extended env
     _ <- defineLambdaVars bodyEnv $ (Atom var : fparams) ++ [varargs]
    
@@ -518,7 +518,7 @@ compile env
    
     -- Store var in huskc's env for macro processing (and same for other vers of define)
     ebody <- mapM (\ lisp -> Language.Scheme.Macro.macroEval env lisp LSC.apply) fbody
-    _ <- makeVarargs varargs env fparams ebody >>= defineVar env var
+    _ <- lift (makeVarargs varargs env fparams ebody) >>= defineVar env var
    
     -- Entry point; ensure var is not rebound
     f <- return $ [
@@ -535,7 +535,7 @@ compile env ast@(List (Atom "lambda" : List fparams : fbody))
     Atom symCallfunc <- _gensym "lambdaFuncEntryPt"
     compiledParams <- compileLambdaList fparams
    
-    bodyEnv <- liftIO $ extendEnv env []
+    bodyEnv <- lift $ extendEnv env []
     -- bind lambda params in the extended env
     _ <- defineLambdaVars bodyEnv fparams
    
@@ -556,7 +556,7 @@ compile env ast@(List (Atom "lambda" : DottedList fparams varargs : fbody))
     Atom symCallfunc <- _gensym "lambdaFuncEntryPt"
     compiledParams <- compileLambdaList fparams
    
-    bodyEnv <- liftIO $ extendEnv env []
+    bodyEnv <- lift $ extendEnv env []
     -- bind lambda params in the extended env
     _ <- defineLambdaVars bodyEnv $ fparams ++ [varargs]
    
@@ -574,7 +574,7 @@ compile env ast@(List (Atom "lambda" : varargs@(Atom _) : fbody))
   compileSpecialFormBody env ast copts (\ _ -> do
     Atom symCallfunc <- _gensym "lambdaFuncEntryPt"
    
-    bodyEnv <- liftIO $ extendEnv env []
+    bodyEnv <- lift $ extendEnv env []
     -- bind lambda params in the extended env
     _ <- defineLambdaVars bodyEnv [varargs]
    
@@ -653,7 +653,7 @@ compile env ast@(List [Atom "set-car!", Atom var, argObj]) copts = do
     -- deal with many possible inputs.
     -- FUTURE: consider making these functions part of the runtime.
     compObj <- return $ AstValue $ "" ++
-      symObj ++ " :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)\n" ++
+      symObj ++ " :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)\n" ++
       symObj ++ " _ _ obj@(List []) _ = throwError $ TypeMismatch \"pair\" obj\n" ++
       symObj ++ " e c obj@(List (_ : _)) _ = " ++ symCompiledObj ++ " e (makeCPSWArgs e c " ++ symDoSet ++ " [obj]) (Nil \"\") Nothing\n" ++
       symObj ++ " e c obj@(DottedList _ _) _ = " ++ symCompiledObj ++ " e (makeCPSWArgs e c " ++ symDoSet ++ " [obj]) (Nil \"\") Nothing\n" ++
@@ -665,7 +665,7 @@ compile env ast@(List [Atom "set-car!", Atom var, argObj]) copts = do
     -- with many possible inputs.
     -- FUTURE: consider making these functions part of the runtime.
     compDoSet <- return $ AstValue $ "" ++
-                 symDoSet ++ " :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)\n" ++
+                 symDoSet ++ " :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)\n" ++
                  symDoSet ++ " e c obj (Just [List (_ : ls)]) = updateObject e \"" ++ var ++ "\" (List (obj : ls)) >>= " ++ finalContinuation ++
                  symDoSet ++ " e c obj (Just [DottedList (_ : ls) l]) = updateObject e \"" ++ var ++ "\" (DottedList (obj : ls) l) >>= " ++ finalContinuation ++
                  symDoSet ++ " _ _ _ _ = throwError $ InternalError \"Unexpected argument to " ++ symDoSet ++ "\"\n"
@@ -714,7 +714,7 @@ compile env ast@(List [Atom "set-cdr!", Atom var, argObj]) copts = do
     -- This is so verbose because we need to have overloads of symObj to deal with many possible inputs.
     -- FUTURE: consider making these functions part of the runtime.
     compObj <- return $ AstValue $ "" ++
-      symObj ++ " :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)\n" ++
+      symObj ++ " :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)\n" ++
       symObj ++ " _ _ obj@(List []) _ = throwError $ TypeMismatch \"pair\" obj\n" ++
    -- TODO: below, we want to make sure obj is of the right type. if so, 
    -- compile obj and call into the "set" 
@@ -729,7 +729,7 @@ compile env ast@(List [Atom "set-cdr!", Atom var, argObj]) copts = do
     -- to deal with many possible inputs.
     -- FUTURE: consider making these functions part of the runtime.
     compDoSet <- return $ AstValue $ "" ++
-      symDoSet ++ " :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)\n" ++
+      symDoSet ++ " :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)\n" ++
       symDoSet ++ " e c obj (Just [List (l : _)]) = do\n" ++
                   "   l' <- recDerefPtrs l\n" ++
                   "   obj' <- recDerefPtrs obj\n" ++
@@ -1015,16 +1015,16 @@ compile env args@(List (_ : _)) copts = mfunc env args compileApply copts
 compile _ badForm _ = throwError $ BadSpecialForm "Unrecognized special form" badForm
 
 -- |Expand macros and compile the resulting code
-mcompile :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => Env r -> LispVal r -> CompOpts -> IOThrowsError r [HaskAST]
+mcompile :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> LispVal m r -> CompOpts -> IOThrowsError m r [HaskAST]
 mcompile env lisp = mfunc env lisp compile
 
 -- |Expand macros and then pass control to the given function 
-mfunc :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r)
-      => Env r
-      -> LispVal r 
-      -> (Env r -> LispVal r -> CompOpts -> IOThrowsError r [HaskAST]) 
+mfunc :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r)
+      => Env m r
+      -> LispVal m r 
+      -> (Env m r -> LispVal m r -> CompOpts -> IOThrowsError m r [HaskAST]) 
       -> CompOpts 
-      -> IOThrowsError r [HaskAST] 
+      -> IOThrowsError m r [HaskAST] 
 mfunc env lisp func copts = do
   expanded <- Language.Scheme.Macro.macroEval env lisp LSC.apply
   divertVars env expanded copts func
@@ -1032,16 +1032,16 @@ mfunc env lisp func copts = do
 -- |Do the actual insertion of diverted variables back to the 
 --  compiled program.
 divertVars 
-    :: ReadRef r IO
-    => Env r 
+    :: (MonadSerial m, ReadRef r m)
+    => Env m r 
     -- ^ Current compile Environment
-    -> LispVal r
+    -> LispVal m r
     -- ^ Lisp code after macro expansion
     -> CompOpts
     -- ^ Compiler options
-    -> (Env r -> LispVal r -> CompOpts -> IOThrowsError r [HaskAST])
+    -> (Env m r -> LispVal m r -> CompOpts -> IOThrowsError m r [HaskAST])
     -- ^ Continuation to call into after vars are diverted
-    -> IOThrowsError r [HaskAST]
+    -> IOThrowsError m r [HaskAST]
     -- ^ Code generated by the continuation, along with the code
     --   added to divert vars to the compiled program
 divertVars env expanded copts@(CompileOptions _ uvar uargs nfnc) func = do
@@ -1057,7 +1057,7 @@ divertVars env expanded copts@(CompileOptions _ uvar uargs nfnc) func = do
 
 -- |Take a list of variables diverted into env at compile time, and
 --  divert them into the env at runtime
-compileDivertedVars :: String -> Env r -> [LispVal r] -> CompOpts -> IOThrowsError r HaskAST
+compileDivertedVars :: Monad m => String -> Env m r -> [LispVal m r] -> CompOpts -> IOThrowsError m r HaskAST
 compileDivertedVars 
   formNext _ vars 
   copts@(CompileOptions _ useVal useArgs _) = do
@@ -1077,12 +1077,12 @@ compileDivertedVars
   return $ createAstFunc copts f
 
 -- |Create the function entry point for a special form
-compileSpecialFormEntryPoint :: String -> String -> CompOpts -> IOThrowsError r HaskAST
+compileSpecialFormEntryPoint :: Monad m => String -> String -> CompOpts -> IOThrowsError m r HaskAST
 compileSpecialFormEntryPoint formName formSym copts = do
  compileSpecialForm formName ("" ++ formSym ++ " env cont (Nil \"\") (Just [])") copts
 
 -- | Helper function for compiling a special form
-compileSpecialForm :: String -> String -> CompOpts -> IOThrowsError r HaskAST
+compileSpecialForm :: Monad m => String -> String -> CompOpts -> IOThrowsError m r HaskAST
 compileSpecialForm _ formCode copts = do
  f <- return $ [
        AstValue $ "  " ++ formCode]
@@ -1090,17 +1090,17 @@ compileSpecialForm _ formCode copts = do
 
 -- |A wrapper for each special form that allows the form variable 
 --  (EG: "if") to be redefined at compile time
-compileSpecialFormBody :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r)
-                       => Env r
-                       -> LispVal r
+compileSpecialFormBody :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r)
+                       => Env m r
+                       -> LispVal m r
                        -> CompOpts
-                       -> (Maybe String -> IOThrowsError r [HaskAST])
-                       -> IOThrowsError r [HaskAST]
+                       -> (Maybe String -> IOThrowsError m r [HaskAST])
+                       -> IOThrowsError m r [HaskAST]
 compileSpecialFormBody env 
                        ast@(List (Atom fnc : _)) 
                        copts@(CompileOptions _ _ _ nextFunc) 
                        spForm = do
-  isDefined <- liftIO $ isRecBound env fnc
+  isDefined <- lift $ isRecBound env fnc
   case isDefined of
     True -> mfunc env ast compileApply copts 
     False -> spForm nextFunc
@@ -1108,12 +1108,12 @@ compileSpecialFormBody _ _ _ _ = throwError $ InternalError "compileSpecialFormB
 
 -- | Compile an intermediate expression (such as an arg to if) and 
 --   call into the next continuation with it's value
-compileExpr :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => Env r -> LispVal r -> String -> Maybe String -> IOThrowsError r [HaskAST]
+compileExpr :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> LispVal m r -> String -> Maybe String -> IOThrowsError m r [HaskAST]
 compileExpr env expr symThisFunc fForNextExpr = do
   mcompile env expr (CompileOptions symThisFunc False False fForNextExpr) 
 
 -- |Compile a function call
-compileApply :: forall r. (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => Env r -> LispVal r -> CompOpts -> IOThrowsError r [HaskAST]
+compileApply :: forall m r. (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> LispVal m r -> CompOpts -> IOThrowsError m r [HaskAST]
 compileApply env (List (func : fparams)) copts@(CompileOptions coptsThis _ _ coptsNext) = do
 
 --
@@ -1285,7 +1285,7 @@ compileApply env (List (func : fparams)) copts@(CompileOptions coptsThis _ _ cop
 
   -- |Compile each argument as its own continuation (lambda), and then
   --  call the function using @applyWrapper@
-  compileArgs :: String -> Bool -> (Maybe String) -> [LispVal r] -> IOThrowsError r [HaskAST]
+  compileArgs :: String -> Bool -> (Maybe String) -> [LispVal m r] -> IOThrowsError m r [HaskAST]
   compileArgs thisFunc thisFuncUseValue maybeFnc args = do
     case args of
       (a:as) -> do
@@ -1348,7 +1348,7 @@ compileApply _ err _ = do
     throwError $ Default $ "compileApply - Unexpected argument: " ++ show err
 
 -- |Determines if the given lispval is a primitive function
-isPrim :: (ReadRef r IO, PtrEq r) => Env r -> LispVal r -> IOThrowsError r (Maybe (LispVal r))
+isPrim :: (ReadRef r m, PtrEq m r) => Env m r -> LispVal m r -> IOThrowsError m r (Maybe (LispVal m r))
 isPrim env (Atom func) = do
   val <- getVar env func >>= recDerefPtrs
   case val of
@@ -1363,21 +1363,21 @@ isPrim _ _ = return Nothing
 -- Atoms are a special case since they denote variables that will only be
 -- available at runtime, so a flag is used to selectively include them.
 --
-_collectLiterals :: [LispVal r] -> [LispVal r] -> Bool -> (Maybe [LispVal r])
+_collectLiterals :: [LispVal m r] -> [LispVal m r] -> Bool -> (Maybe [LispVal m r])
 _collectLiterals (List _ : _) _ _ = Nothing
 _collectLiterals (Atom _ : _) _ False = Nothing
 _collectLiterals (a : as) nfs varFlag = _collectLiterals as (a : nfs) varFlag
 _collectLiterals [] nfs _ = Just $ reverse nfs
 
 -- Wrappers for the above function
-collectLiterals, collectLiteralsAndVars :: [LispVal r] -> (Maybe [LispVal r])
+collectLiterals, collectLiteralsAndVars :: [LispVal m r] -> (Maybe [LispVal m r])
 collectLiteralsAndVars args = _collectLiterals args [] True
 collectLiterals args = _collectLiterals args [] False
 
 -- Experimental:
 -- -- Take as many literals as possible from the given list, and
 -- -- return those literals and the rest of the list
--- takeLiterals :: LispVal r -> [LispVal r] -> ([LispVal r], [LispVal r])
+-- takeLiterals :: LispVal m r -> [LispVal m r] -> ([LispVal m r], [LispVal m r])
 -- takeLiterals (List _) ls = (ls, [])
 -- takeLiterals _ ls' = do
 --   loop ls' []
@@ -1393,9 +1393,9 @@ collectLiterals args = _collectLiterals args [] False
 --   isLiteral _ = True
 
 -- Compile variable as a stand-alone line of code
-compileInlineVar :: ReadRef r IO => Env r -> String -> String -> IOThrowsError r HaskAST
+compileInlineVar :: ReadRef r m => Env m r -> String -> String -> IOThrowsError m r HaskAST
 compileInlineVar env a hsName = do
- isDefined <- liftIO $ isRecBound env a
+ isDefined <- lift $ isRecBound env a
  case isDefined of
    True -> return $ AstValue $ "  " ++ hsName ++ " <- getRTVar env \"" ++ a ++ "\""
    False -> throwError $ UnboundVar "Variable is not defined" a
@@ -1406,8 +1406,8 @@ isSingleValue [(AstValue _)] = True
 isSingleValue [(AstRef _)] = True
 isSingleValue _ = False
 
-wrapObject :: String
-              -> Maybe String -> [HaskAST] -> IOThrowsError r [HaskAST]
+wrapObject :: Monad m => String
+              -> Maybe String -> [HaskAST] -> IOThrowsError m r [HaskAST]
 wrapObject thisF nextF es = do
  case es of
   [val@(AstValue _)] -> compileScalar' val $ CompileOptions thisF False False nextF

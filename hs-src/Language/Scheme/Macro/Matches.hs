@@ -17,7 +17,7 @@ import Control.Exception
 
 -- |Create a nested list
 _create :: Int     -- ^ Number of nesting levels
-       -> LispVal r -- ^ Empty nested list
+       -> LispVal m r -- ^ Empty nested list
 _create level 
     | level < 1     = Nil "" -- Error
     | level == 1    = List []
@@ -32,15 +32,15 @@ _create level
 --
 --    ((1) () (2))
 --
-fill :: [LispVal r] -> Int -> [LispVal r]
+fill :: [LispVal m r] -> Int -> [LispVal m r]
 fill l len 
   | length l < len  = fill (l ++ [List []]) len
   | otherwise       = l
 
 -- |Get an element at given location in the nested list
-getData :: LispVal r -- ^ The nested list to read from
+getData :: LispVal m r -- ^ The nested list to read from
         -> [Int]   -- ^ Location to read an element from, all numbers are 0-based
-        -> LispVal r -- ^ Value read, or @Nil@ if none
+        -> LispVal m r -- ^ Value read, or @Nil@ if none
 getData (List lData) (i:is) = do
   if length lData < i
      then Nil "" -- Error: there are not enough elements in the list
@@ -53,12 +53,12 @@ getData val [] = val -- Base case: we have found the requested element
 getData val _ = val -- Should never be reached, just give up and return val 
 
 -- |Add an element to the given nested list
-setData :: LispVal r -- ^ The nested list to modify
+setData :: LispVal m r -- ^ The nested list to modify
         -> [Int]   -- ^ Location to insert the new element, from top-most to the leaf.
                    --   For example [1, 2] means add to the second top-most list, at
                    --   its 3rd position.
-        -> LispVal r -- ^ Value to insert 
-        -> LispVal r -- ^ Resulant list
+        -> LispVal m r -- ^ Value to insert 
+        -> LispVal m r -- ^ Resulant list
 setData (List lData) (i:is) val = do
   -- Fill /holes/ as long as they are not at the leaves.
   --
@@ -97,7 +97,7 @@ setData (List lData) (i:is) val = do
 setData _ _ val = val -- Should never be reached; just return val
 
 -- |Compare actual input with expected
-_cmp :: LispVal r -> LispVal r -> IO ()
+_cmp :: LispVal m r -> LispVal m r -> IO ()
 _cmp input expected = do
   print input
   print (assert (eqVal expected input) input)

@@ -125,7 +125,7 @@ symbol :: Parser Char
 symbol = oneOf "!$%&|*+-/:<=>?@^_~."
 
 -- |Parse an atom (scheme symbol)
-parseAtom :: Parser (LispVal r)
+parseAtom :: Parser (LispVal m r)
 parseAtom = do
   atom <- identifier
   if atom == "."
@@ -133,7 +133,7 @@ parseAtom = do
      else return $ Atom atom
 
 -- |Parse a boolean
-parseBool :: Parser (LispVal r)
+parseBool :: Parser (LispVal m r)
 parseBool = do _ <- string "#"
                x <- oneOf "tf"
                return $ case x of
@@ -142,7 +142,7 @@ parseBool = do _ <- string "#"
                           _ -> Bool False
 
 -- |Parse a character
-parseChar :: Parser (LispVal r)
+parseChar :: Parser (LispVal m r)
 parseChar = do
   _ <- try (string "#\\")
   c <- anyChar
@@ -166,7 +166,7 @@ parseChar = do
         _ -> pzero
 
 -- |Parse an integer in octal notation, base 8
-parseOctalNumber :: Parser (LispVal r)
+parseOctalNumber :: Parser (LispVal m r)
 parseOctalNumber = do
   _ <- try (string "#o")
   sign <- many (oneOf "-")
@@ -177,7 +177,7 @@ parseOctalNumber = do
      _ -> pzero
 
 -- |Parse an integer in binary notation, base 2
-parseBinaryNumber :: Parser (LispVal r)
+parseBinaryNumber :: Parser (LispVal m r)
 parseBinaryNumber = do
   _ <- try (string "#b")
   sign <- many (oneOf "-")
@@ -188,7 +188,7 @@ parseBinaryNumber = do
      _ -> pzero
 
 -- |Parse an integer in hexadecimal notation, base 16
-parseHexNumber :: Parser (LispVal r)
+parseHexNumber :: Parser (LispVal m r)
 parseHexNumber = do
   _ <- try (string "#x")
   sign <- many (oneOf "-")
@@ -199,7 +199,7 @@ parseHexNumber = do
      _ -> pzero
 
 -- |Parser for Integer, base 10
-parseDecimalNumber :: Parser (LispVal r)
+parseDecimalNumber :: Parser (LispVal m r)
 parseDecimalNumber = do
   _ <- try (many (string "#d"))
   sign <- many (oneOf "-")
@@ -213,13 +213,13 @@ parseDecimalNumber = do
 --  an exponent (scientific notation). If so,
 --  the integer is converted to a float of the
 --  given magnitude.
-parseDecimalNumberMaybeExponent :: Parser (LispVal r)
+parseDecimalNumberMaybeExponent :: Parser (LispVal m r)
 parseDecimalNumberMaybeExponent = do
   num <- parseDecimalNumber
   parseNumberExponent num
 
 -- |Parse an integer in any base
-parseNumber :: Parser (LispVal r)
+parseNumber :: Parser (LispVal m r)
 parseNumber = parseDecimalNumberMaybeExponent <|>
               parseHexNumber <|>
               parseBinaryNumber <|>
@@ -227,7 +227,7 @@ parseNumber = parseDecimalNumberMaybeExponent <|>
               "Unable to parse number"
 
 -- |Parse a floating point number
-parseRealNumber :: Parser (LispVal r)
+parseRealNumber :: Parser (LispVal m r)
 parseRealNumber = do
   sign <- many (oneOf "-+")
   num <- many digit
@@ -247,7 +247,7 @@ parseRealNumber = do
 
 -- | Parse the exponent section of a floating point number
 --   in scientific notation. Eg "e10" from "1.0e10"
-parseNumberExponent :: LispVal r -> Parser (LispVal r)
+parseNumberExponent :: LispVal m r -> Parser (LispVal m r)
 parseNumberExponent n = do 
   expnt <- many $ oneOf "Ee"
   case (length expnt) of
@@ -264,7 +264,7 @@ parseNumberExponent n = do
   buildResult _ _ = pzero
 
 -- |Parse a rational number
-parseRationalNumber :: Parser (LispVal r)
+parseRationalNumber :: Parser (LispVal m r)
 parseRationalNumber = do
   pnumerator <- parseDecimalNumber
   case pnumerator of
@@ -282,7 +282,7 @@ parseRationalNumber = do
     _ -> pzero
 
 -- |Parse a complex number
-parseComplexNumber :: Parser (LispVal r)
+parseComplexNumber :: Parser (LispVal m r)
 parseComplexNumber = do
   lispreal <- (try parseRealNumber <|> try parseRationalNumber <|> parseDecimalNumber)
   let real = case lispreal of
@@ -327,7 +327,7 @@ parseHexScalar num = do
         _ -> return $ DC.chr $ fst $ head ns
 
 -- |Parse a string
-parseString :: Parser (LispVal r)
+parseString :: Parser (LispVal m r)
 parseString = do
   _ <- char '"'
   x <- many (parseEscapedChar <|> noneOf "\"")
@@ -335,13 +335,13 @@ parseString = do
   return $ String x
 
 -- |Parse a vector
-parseVector :: Parser (LispVal r)
+parseVector :: Parser (LispVal m r)
 parseVector = do
   vals <- sepBy parseExpr whiteSpace
   return $ Vector (listArray (0, (length vals - 1)) vals)
 
 -- |Parse a bytevector
-parseByteVector :: Parser (LispVal r)
+parseByteVector :: Parser (LispVal m r)
 parseByteVector = do
   ns <- sepBy parseNumber whiteSpace
   return $ ByteVector $ BS.pack $ map conv ns
@@ -351,14 +351,14 @@ parseByteVector = do
 
 -- |Parse a hash table. The table is either empty or is made up of
 --  an alist (associative list)
-parseHashTable :: Parser (LispVal r)
+parseHashTable :: Parser (LispVal m r)
 parseHashTable = do
   -- This function uses explicit recursion to loop over the parsed list:
   -- As long as it is an alist, the members are appended to an accumulator
   -- so they can be added to the hash table. However, if the input list is
   -- determined not to be an alist, Nothing is returned, letting the parser
   -- know that a valid hashtable was not read.
-  let f :: [(LispVal r, LispVal r)] -> [LispVal r] -> Maybe [(LispVal r, LispVal r)]
+  let f :: [(LispVal m r, LispVal m r)] -> [LispVal m r] -> Maybe [(LispVal m r, LispVal m r)]
       f acc [] = Just acc
       f acc (List [a, b] :ls) = f (acc ++ [(a, b)]) ls
       f acc (DottedList [a] b :ls) = f (acc ++ [(a, b)]) ls
@@ -370,12 +370,12 @@ parseHashTable = do
     Nothing -> pzero
 
 -- |Parse a list
-parseList :: Parser (LispVal r)
+parseList :: Parser (LispVal m r)
 parseList = liftM List $ sepBy parseExpr whiteSpace
 -- TODO: wanted to use endBy (or a variant) above, but it causes an error such that dotted lists are not parsed
 
 -- |Parse a dotted list (scheme pair)
-parseDottedList :: Parser (LispVal r)
+parseDottedList :: Parser (LispVal m r)
 parseDottedList = do
   phead <- endBy parseExpr whiteSpace
   case phead of
@@ -410,14 +410,14 @@ parseDottedList = do
         _ -> return $ DottedList phead ptail
 
 -- |Parse a quoted expression
-parseQuoted :: Parser (LispVal r)
+parseQuoted :: Parser (LispVal m r)
 parseQuoted = do
   _ <- lexeme $ char '\''
   x <- parseExpr
   return $ List [Atom "quote", x]
 
 -- |Parse a quasi-quoted expression
-parseQuasiQuoted :: Parser (LispVal r)
+parseQuasiQuoted :: Parser (LispVal m r)
 parseQuasiQuoted = do
   _ <- lexeme $ char '`'
   x <- parseExpr
@@ -425,14 +425,14 @@ parseQuasiQuoted = do
 
 -- |Parse an unquoted expression (a quasiquotated expression preceded
 --  by a comma)
-parseUnquoted :: Parser (LispVal r)
+parseUnquoted :: Parser (LispVal m r)
 parseUnquoted = do
   _ <- try (lexeme $ char ',')
   x <- parseExpr
   return $ List [Atom "unquote", x]
 
 -- |Parse an unquote-spliced expression
-parseUnquoteSpliced :: Parser (LispVal r)
+parseUnquoteSpliced :: Parser (LispVal m r)
 parseUnquoteSpliced = do
   _ <- try (lexeme $ string ",@")
   x <- parseExpr
@@ -443,7 +443,7 @@ parseUnquoteSpliced = do
 -- or eliminating the number of try's below)
 
 -- |Parse an expression
-parseExpr :: Parser (LispVal r)
+parseExpr :: Parser (LispVal m r)
 parseExpr =
       try (lexeme parseComplexNumber)
   <|> try (lexeme parseRationalNumber)
@@ -476,23 +476,23 @@ parseExpr =
   <?> "Expression"
 
 -- |Initial parser used by the high-level parse functions
-mainParser :: Parser (LispVal r)
+mainParser :: Parser (LispVal m r)
 mainParser = do
     _ <- whiteSpace
     parseExpr
 
 -- |Use a parser to parse the given text, throwing an error
 --  if there is a problem parsing the text.
-readOrThrow :: Parser a -> String -> ThrowsError r a
+readOrThrow :: Parser a -> String -> ThrowsError m r a
 readOrThrow parser input = case parse parser "lisp" input of
   Left err -> throwError $ Parser err
   Right val -> return val
 
 -- |Parse an expression from a string of text
-readExpr :: String -> ThrowsError r (LispVal r)
+readExpr :: String -> ThrowsError m r (LispVal m r)
 readExpr = readOrThrow mainParser
 
 -- |Parse many expressions from a string of text
-readExprList :: String -> ThrowsError r [LispVal r]
+readExprList :: String -> ThrowsError m r [LispVal m r]
 readExprList = readOrThrow (endBy mainParser whiteSpace)
 

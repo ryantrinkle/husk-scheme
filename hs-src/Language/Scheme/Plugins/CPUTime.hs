@@ -1,3 +1,4 @@
+{-# LANGUAGE RankNTypes #-}
 {- |
 Module      : Language.Scheme.Plugins.CPUTime
 Copyright   : Justin Ethier
@@ -23,13 +24,13 @@ import System.CPUTime
 import Control.Monad.Except
 
 -- |Wrapper for CPUTime.getCPUTime
-get :: [LispVal r] -> IOThrowsError r (LispVal r)
+get :: MonadIO m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 get [] = do
   t <- liftIO $ System.CPUTime.getCPUTime
   return $ Number t
 get badArgList = throwError $ NumArgs (Just 0) badArgList
 
 -- |Wrapper for CPUTime.cpuTimePrecision
-precision :: [LispVal r] -> IOThrowsError r (LispVal r)
+precision :: Monad m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 precision [] = return $ Number $ System.CPUTime.cpuTimePrecision
 precision badArgList = throwError $ NumArgs (Just 0) badArgList

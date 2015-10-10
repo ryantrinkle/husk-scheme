@@ -1,6 +1,7 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE RankNTypes #-}
 
 {- |
 Module      : Language.Scheme.Core
@@ -93,7 +94,7 @@ showBanner = do
   putStrLn $ " Version " ++ (DV.showVersion PHS.version) ++ " "
   putStrLn "                                                                         "
 
-getHuskFeatures :: IO [LispVal r]
+getHuskFeatures :: Monad m => m [LispVal m r]
 getHuskFeatures = do
     -- TODO: windows posix
     return [ Atom "r7rs"
@@ -107,11 +108,11 @@ getHuskFeatures = do
            ]
 
 -- |Get the full path to a data file installed for husk
-getDataFileFullPath :: String -> IO String
-getDataFileFullPath = PHS.getDataFileName
+getDataFileFullPath :: MonadIO m => String -> m String
+getDataFileFullPath = liftIO . PHS.getDataFileName
 
 -- Future use:
--- getDataFileFullPath' :: [LispVal r] -> IOThrowsError LispVal r
+-- getDataFileFullPath' :: [LispVal m r] -> IOThrowsError LispVal m r
 -- getDataFileFullPath' [String s] = do
 --     path <- liftIO $ PHS.getDataFileName s
 --     return $ String path
@@ -122,7 +123,7 @@ getDataFileFullPath = PHS.getDataFileName
 --  libraries. If the file is not found in the current directory but exists
 --  as a husk library, return the full path to the file in the library.
 --  Otherwise just return the given filename.
-findFileOrLib :: (ReadRef r IO, PtrEq r) => String -> IOThrowsError r String
+findFileOrLib :: (MonadIO m, ReadRef r m, PtrEq m r) => String -> IOThrowsError m r String
 findFileOrLib filename = do
     fileAsLib <- liftIO $ getDataFileFullPath $ "lib/" ++ filename
     exists <- fileExists [String filename]
@@ -131,7 +132,7 @@ findFileOrLib filename = do
         (Bool False, Bool True) -> return fileAsLib
         _ -> return filename
 
-libraryExists :: (ReadRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+libraryExists :: (MonadIO m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 libraryExists [p@(Pointer _ _)] = do
     p' <- recDerefPtrs p
     libraryExists [p']
@@ -143,14 +144,14 @@ libraryExists [(String filename)] = do
 libraryExists _ = return $ Bool False
 
 -- |Register optional SRFI extensions
-registerExtensions :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => Env r -> (FilePath -> IO FilePath) -> IO ()
+registerExtensions :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> (FilePath -> m FilePath) -> m ()
 registerExtensions env getDataFileName = do
   _ <- registerSRFI env getDataFileName 1
   _ <- registerSRFI env getDataFileName 2
   return ()
 
 -- |Register the given SRFI
-registerSRFI :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => Env r -> (FilePath -> IO FilePath) -> Integer -> IO ()
+registerSRFI :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> (FilePath -> m FilePath) -> Integer -> m ()
 registerSRFI env getDataFileName num = do
  filename <- getDataFileName $ "lib/srfi/srfi-" ++ show num ++ ".scm"
  _ <- evalString env $ "(register-extension '(srfi " ++ show num ++ ") \"" ++ 
@@ -161,7 +162,7 @@ registerSRFI env getDataFileName num = do
 
 -- |This is the recommended function to use to display a lisp error, instead
 --  of just using show directly.
-showLispError :: forall r. (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => LispError r -> IO String
+showLispError :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => LispError m r -> m String
 showLispError (NumArgs n lvs) = do
   lvs' <- runExceptT $ mapM recDerefPtrs lvs
   case lvs' of
@@ -170,12 +171,12 @@ showLispError (NumArgs n lvs) = do
 showLispError (TypeMismatch str p@(Pointer _ e)) = do
   lv' <- evalLisp' e p 
   case lv' of
-    Left _ -> showLispError (TypeMismatch str $ Atom $ show p :: LispError r)
+    Left _ -> showLispError (TypeMismatch str $ Atom $ show p :: LispError m r)
     Right val -> showLispError $ TypeMismatch str val
 showLispError (BadSpecialForm str p@(Pointer _ e)) = do
   lv' <- evalLisp' e p 
   case lv' of
-    Left _ -> showLispError (BadSpecialForm str $ Atom $ show p :: LispError r)
+    Left _ -> showLispError (BadSpecialForm str $ Atom $ show p :: LispError m r)
     Right val -> showLispError $ BadSpecialForm str val
 showLispError (ErrorWithCallHist err hist) = do
   err' <- showLispError err
@@ -188,7 +189,7 @@ showLispError err = return $ show err
 -- |Execute an IO action and return result or an error message.
 --  This is intended for use by a REPL, where a result is always
 --  needed regardless of type.
-runIOThrowsREPL :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => IOThrowsError r String -> IO String
+runIOThrowsREPL :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => IOThrowsError m r String -> m String
 runIOThrowsREPL action = do
     runState <- runExceptT action
     case runState of
@@ -196,7 +197,7 @@ runIOThrowsREPL action = do
         Right val -> return val
 
 -- |Execute an IO action and return error or Nothing if no error was thrown.
-runIOThrows :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => IOThrowsError r String -> IO (Maybe String)
+runIOThrows :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => IOThrowsError m r String -> m (Maybe String)
 runIOThrows action = do
     runState <- runExceptT action
     case runState of
@@ -220,21 +221,21 @@ evalString env "(* 3 9)"
 "27"
 @
 -}
-evalString :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => Env r -> String -> IO String
+evalString :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> String -> m String
 evalString env expr = do
   runIOThrowsREPL $ liftM show $ liftThrows (readExpr expr) >>= evalLisp env
 
 -- |Evaluate a string and print results to console
-evalAndPrint :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => Env r -> String -> IO ()
-evalAndPrint env expr = evalString env expr >>= putStrLn
+evalAndPrint :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> String -> m ()
+evalAndPrint env expr = evalString env expr >>= liftIO . putStrLn
 
 -- |Evaluate a lisp data structure and return a value for use by husk
-evalLisp :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => Env r -> LispVal r -> IOThrowsError r (LispVal r)
+evalLisp :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> LispVal m r -> IOThrowsError m r (LispVal m r)
 evalLisp env lisp = do
   v <- meval env (makeNullContinuation env) lisp
   safeRecDerefPtrs [] v
 
--- |Evaluate a lisp data structure and return the LispVal r or LispError r
+-- |Evaluate a lisp data structure and return the LispVal m r or LispError m r
 --  result directly
 -- 
 -- @
@@ -243,14 +244,14 @@ evalLisp env lisp = do
 --    Left err -> putStrLn $ "Error: " ++ (show err)
 --    Right val -> putStrLn $ show val
 -- @
-evalLisp' :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => Env r -> LispVal r -> IO (ThrowsError r (LispVal r))
+evalLisp' :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> LispVal m r -> m (ThrowsError m r (LispVal m r))
 evalLisp' env lisp = runExceptT (evalLisp env lisp)
 
 -- |A wrapper for macroEval and eval
-meval, mprepareApply :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => Env r -> LispVal r -> LispVal r -> IOThrowsError r (LispVal r)
+meval, mprepareApply :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> LispVal m r -> LispVal m r -> IOThrowsError m r (LispVal m r)
 meval env cont lisp = mfunc env cont lisp eval
 mprepareApply env cont lisp = mfunc env cont lisp prepareApply
-mfunc :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => Env r -> LispVal r -> LispVal r -> (Env r -> LispVal r -> LispVal r -> IOThrowsError r (LispVal r)) -> IOThrowsError r (LispVal r)
+mfunc :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> LispVal m r -> LispVal m r -> (Env m r -> LispVal m r -> LispVal m r -> IOThrowsError m r (LispVal m r)) -> IOThrowsError m r (LispVal m r)
 mfunc env cont lisp func = do
   Language.Scheme.Macro.macroEval env lisp apply >>= (func env cont) 
 {- OBSOLETE:
@@ -270,7 +271,7 @@ mfunc env cont lisp func = do
    This is a difficult problem to solve and this code will likely just
    end up going away because we are not going with this approach...
 
-updateContEnv :: Env r -> LispVal r -> IOThrowsError r (LispVal r)
+updateContEnv :: Env m r -> LispVal m r -> IOThrowsError m r (LispVal m r)
 updateContEnv env (Continuation _ curC (Just nextC) dwind) = do
     next <- updateContEnv env nextC
     return $ Continuation env curC (Just next) dwind
@@ -284,12 +285,12 @@ updateContEnv _ val = do
     returning values directly. continueEval then uses the continuation 
     argument to manage program control flow.
  -}
-continueEval :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r)
-             => Env r     -- ^ Current environment
-             -> LispVal r -- ^ Current continuation
-             -> LispVal r -- ^ Value of previous computation
-             -> Maybe [LispVal r] -- ^ Extra arguments from previous computation
-             -> IOThrowsError r (LispVal r) -- ^ Final value of computation
+continueEval :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r)
+             => Env m r     -- ^ Current environment
+             -> LispVal m r -- ^ Current continuation
+             -> LispVal m r -- ^ Value of previous computation
+             -> Maybe [LispVal m r] -- ^ Extra arguments from previous computation
+             -> IOThrowsError m r (LispVal m r) -- ^ Final value of computation
 
 {- Passing a higher-order function as the continuation; just evaluate it. This is
  - done to enable an 'eval' function to be broken up into multiple sub-functions,
@@ -362,7 +363,7 @@ NOTE:  This function does not include macro support and should not be called dir
 -- code easier to follow. Whenever a single function has been broken into multiple ones for the purpose of CPS,
 -- those additional functions are defined locally using @where@, and each has been given a /cps/ prefix.
 --
-eval :: forall r. (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => Env r -> LispVal r -> LispVal r -> IOThrowsError r (LispVal r)
+eval :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> LispVal m r -> LispVal m r -> IOThrowsError m r (LispVal m r)
 eval env cont val@(Nil _) = continueEval env cont val Nothing
 eval env cont val@(String _) = continueEval env cont val Nothing
 eval env cont val@(Char _) = continueEval env cont val Nothing
@@ -397,7 +398,7 @@ eval env cont (List [Atom "quote", val]) = continueEval env cont val Nothing
 
 -- A special form to assist with debugging macros
 eval env cont args@(List [Atom "expand" , _body]) = do
- bound <- liftIO $ isRecBound env "expand"
+ bound <- lift $ isRecBound env "expand"
  if bound
   then prepareApply env cont args -- if bound to a variable in this scope; call into it
   else do
@@ -406,11 +407,11 @@ eval env cont args@(List [Atom "expand" , _body]) = do
  
 -- A rudimentary implementation of let-syntax
 eval env cont args@(List (Atom "let-syntax" : List _bindings : _body)) = do
- bound <- liftIO $ isRecBound env "let-syntax"
+ bound <- lift $ isRecBound env "let-syntax"
  if bound
   then prepareApply env cont args -- if bound to a variable in this scope; call into it
   else do 
-   bodyEnv <- liftIO $ extendEnv env []
+   bodyEnv <- lift $ extendEnv env []
    _ <- Language.Scheme.Macro.loadMacros env bodyEnv Nothing False _bindings
    -- Expand whole body as a single continuous macro, to ensure hygiene
    expanded <- Language.Scheme.Macro.expand bodyEnv False (List _body) apply
@@ -419,11 +420,11 @@ eval env cont args@(List (Atom "let-syntax" : List _bindings : _body)) = do
      e -> continueEval bodyEnv cont e Nothing
 
 eval env cont args@(List (Atom "letrec-syntax" : List _bindings : _body)) = do
- bound <- liftIO $ isRecBound env "letrec-syntax"
+ bound <- lift $ isRecBound env "letrec-syntax"
  if bound
   then prepareApply env cont args -- if bound to a variable in this scope; call into it
   else do 
-   bodyEnv <- liftIO $ extendEnv env []
+   bodyEnv <- lift $ extendEnv env []
    -- A primitive means of implementing letrec, by simply assuming that each macro is defined in
    -- the letrec's environment, instead of the parent env. Not sure if this is 100% correct but it
    -- is good enough to pass the R5RS test case so it will be used as a rudimentary implementation 
@@ -449,7 +450,7 @@ eval env cont (List [Atom "define-syntax",
 eval env cont args@(List [Atom "define-syntax", Atom keyword,
   (List [Atom "er-macro-transformer", 
     (List (Atom "lambda" : List fparams : fbody))])]) = do
- bound <- liftIO $ isRecBound env "define-syntax"
+ bound <- lift $ isRecBound env "define-syntax"
  if bound
   then prepareApply env cont args -- if bound to var in this scope; call it
   else do 
@@ -457,13 +458,13 @@ eval env cont args@(List [Atom "define-syntax", Atom keyword,
     -- TODO: now just need to figure out initial entry point to the ER func
     --       for now can ignore complications of an ER found during syn-rules transformation
     _ <- validateFuncParams fparams (Just 3)
-    f <- makeNormalFunc env fparams fbody 
+    f <- lift $ makeNormalFunc env fparams fbody 
     _ <- defineNamespacedVar env macroNamespace keyword $ SyntaxExplicitRenaming f
     continueEval env cont (Nil "") Nothing 
 
 eval env cont args@(List [Atom "define-syntax", Atom keyword, 
     (List (Atom "syntax-rules" : Atom ellipsis : (List identifiers : rules)))]) = do
- bound <- liftIO $ isRecBound env "define-syntax"
+ bound <- lift $ isRecBound env "define-syntax"
  if bound
   then prepareApply env cont args -- if bound to a variable in this scope; call into it
   else do 
@@ -473,7 +474,7 @@ eval env cont args@(List [Atom "define-syntax", Atom keyword,
 
 eval env cont args@(List [Atom "define-syntax", Atom keyword, 
     (List (Atom "syntax-rules" : (List identifiers : rules)))]) = do
- bound <- liftIO $ isRecBound env "define-syntax"
+ bound <- lift $ isRecBound env "define-syntax"
  if bound
   then prepareApply env cont args -- if bound to a variable in this scope; call into it
   else do 
@@ -493,155 +494,155 @@ eval env cont args@(List [Atom "define-syntax", Atom keyword,
     --
     -- Anyway, this may come back. But not using it for now...
     --
-    --    defEnv <- liftIO $ copyEnv env
+    --    defEnv <- lift $ copyEnv env
     _ <- defineNamespacedVar env macroNamespace keyword $ Syntax (Just env) Nothing False "..." identifiers rules
     continueEval env cont (Nil "") Nothing 
 
 eval env cont args@(List [Atom "if", predic, conseq, alt]) = do
- bound <- liftIO $ isRecBound env "if"
+ bound <- lift $ isRecBound env "if"
  if bound
   then prepareApply env cont args -- if is bound to a variable in this scope; call into it
   else meval env (makeCPS env cont cps) predic
- where cps :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)
+ where cps :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)
        cps e c result _ =
             case result of
               Bool False -> meval e c alt
               _ -> meval e c conseq
 
 eval env cont args@(List [Atom "if", predic, conseq]) = do
- bound <- liftIO $ isRecBound env "if"
+ bound <- lift $ isRecBound env "if"
  if bound
   then prepareApply env cont args -- if is bound to a variable in this scope; call into it
   else meval env (makeCPS env cont cpsResult) predic
- where cpsResult :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)
+ where cpsResult :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)
        cpsResult e c result _ =
             case result of
               Bool False -> continueEval e c (Nil "") Nothing -- Unspecified return value per R5RS
               _ -> meval e c conseq
 
 eval env cont args@(List [Atom "set!", Atom var, form]) = do
- bound <- liftIO $ isRecBound env "set!"
+ bound <- lift $ isRecBound env "set!"
  if bound
   then prepareApply env cont args -- if is bound to a variable in this scope; call into it
   else meval env (makeCPS env cont cpsResult) form
- where cpsResult :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)
+ where cpsResult :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)
        cpsResult e c result _ = do
         value <- setVar e var result 
         continueEval e c value Nothing
 eval env cont args@(List [Atom "set!", nonvar, _]) = do 
- bound <- liftIO $ isRecBound env "set!"
+ bound <- lift $ isRecBound env "set!"
  if bound
   then prepareApply env cont args -- if is bound to a variable in this scope; call into it
   else throwError $ TypeMismatch "variable" nonvar
 eval env cont fargs@(List (Atom "set!" : args)) = do
- bound <- liftIO $ isRecBound env "set!"
+ bound <- lift $ isRecBound env "set!"
  if bound
   then prepareApply env cont fargs -- if is bound to a variable in this scope; call into it
   else throwError $ NumArgs (Just 2) args
 
 eval env cont args@(List [Atom "define", Atom var, form]) = do
- bound <- liftIO $ isRecBound env "define"
+ bound <- lift $ isRecBound env "define"
  if bound
   then prepareApply env cont args -- if is bound to a variable in this scope; call into it
   else meval env (makeCPS env cont cpsResult) form
- where cpsResult :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)
+ where cpsResult :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)
        cpsResult e c result _ = do
         value <- defineVar e var result 
         continueEval e c value Nothing
 
 eval env cont args@(List (Atom "define" : List (Atom var : fparams) : fbody )) = do
- bound <- liftIO $ isRecBound env "define"
+ bound <- lift $ isRecBound env "define"
  if bound
   then prepareApply env cont args -- if is bound to a variable in this scope; call into it
   else do 
       _ <- validateFuncParams fparams Nothing
       -- Cache macro expansions within function body
       ebody <- mapM (\ lisp -> Language.Scheme.Macro.macroEval env lisp apply) fbody
-      result <- (makeNormalFunc env fparams ebody >>= defineVar env var)
+      result <- lift (makeNormalFunc env fparams ebody) >>= defineVar env var
       continueEval env cont result Nothing
 
 eval env cont args@(List (Atom "define" : DottedList (Atom var : fparams) varargs : fbody)) = do
- bound <- liftIO $ isRecBound env "define"
+ bound <- lift $ isRecBound env "define"
  if bound
   then prepareApply env cont args -- if is bound to a variable in this scope; call into it
   else do 
       _ <- validateFuncParams (fparams ++ [varargs]) Nothing
       ebody <- mapM (\ lisp -> Language.Scheme.Macro.macroEval env lisp apply) fbody
-      result <- (makeVarargs varargs env fparams ebody >>= defineVar env var)
+      result <- lift (makeVarargs varargs env fparams ebody) >>= defineVar env var
       continueEval env cont result Nothing
 
 eval env cont args@(List (Atom "lambda" : List fparams : fbody)) = do
- bound <- liftIO $ isRecBound env "lambda"
+ bound <- lift $ isRecBound env "lambda"
  if bound
   then prepareApply env cont args -- if is bound to a variable in this scope; call into it
   else do 
       _ <- validateFuncParams fparams Nothing
       ebody <- mapM (\ lisp -> Language.Scheme.Macro.macroEval env lisp apply) fbody
-      result <- makeNormalFunc env fparams ebody
+      result <- lift $ makeNormalFunc env fparams ebody
       continueEval env cont result Nothing
 
 eval env cont args@(List (Atom "lambda" : DottedList fparams varargs : fbody)) = do
- bound <- liftIO $ isRecBound env "lambda"
+ bound <- lift $ isRecBound env "lambda"
  if bound
   then prepareApply env cont args -- if is bound to a variable in this scope; call into it
   else do 
       _ <- validateFuncParams (fparams ++ [varargs]) Nothing
       ebody <- mapM (\ lisp -> Language.Scheme.Macro.macroEval env lisp apply) fbody
-      result <- makeVarargs varargs env fparams ebody
+      result <- lift $ makeVarargs varargs env fparams ebody
       continueEval env cont result Nothing
 
 eval env cont args@(List (Atom "lambda" : varargs@(Atom _) : fbody)) = do
- bound <- liftIO $ isRecBound env "lambda"
+ bound <- lift $ isRecBound env "lambda"
  if bound
   then prepareApply env cont args -- if is bound to a variable in this scope; call into it
   else do 
       ebody <- mapM (\ lisp -> Language.Scheme.Macro.macroEval env lisp apply) fbody
-      result <- makeVarargs varargs env [] ebody
+      result <- lift $ makeVarargs varargs env [] ebody
       continueEval env cont result Nothing
 
 eval env cont args@(List [Atom "string-set!", Atom var, i, character]) = do
- bound <- liftIO $ isRecBound env "string-set!"
+ bound <- lift $ isRecBound env "string-set!"
  if bound
   then prepareApply env cont args -- if is bound to a variable in this scope; call into it
   else meval env (makeCPS env cont cpsChar) character
  where
-        cpsChar :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)
+        cpsChar :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)
         cpsChar e c chr _ = do
             meval e (makeCPSWArgs e c cpsStr [chr]) i
 
-        cpsStr :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)
+        cpsStr :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)
         cpsStr e c idx (Just [chr]) = do
             value <- getVar env var
             derefValue <- derefPtr value
             meval e (makeCPSWArgs e c cpsSubStr [idx, chr]) derefValue
         cpsStr _ _ _ _ = throwError $ InternalError "Unexpected case in cpsStr"
 
-        cpsSubStr :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)
+        cpsSubStr :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)
         cpsSubStr e c str (Just [idx, chr]) = do
             value <- substr (str, chr, idx) >>= updateObject e var 
             continueEval e c value Nothing
         cpsSubStr _ _ _ _ = throwError $ InternalError "Invalid argument to cpsSubStr"
 
 eval env cont args@(List [Atom "string-set!" , nonvar , _ , _ ]) = do
- bound <- liftIO $ isRecBound env "string-set!"
+ bound <- lift $ isRecBound env "string-set!"
  if bound
   then prepareApply env cont args -- if is bound to a variable in this scope; call into it
   else throwError $ TypeMismatch "variable" nonvar
 eval env cont fargs@(List (Atom "string-set!" : args)) = do 
- bound <- liftIO $ isRecBound env "string-set!"
+ bound <- lift $ isRecBound env "string-set!"
  if bound
   then prepareApply env cont fargs -- if is bound to a variable in this scope; call into it
   else throwError $ NumArgs (Just 3) args
 
 eval env cont args@(List [Atom "set-car!", Atom var, argObj]) = do
- bound <- liftIO $ isRecBound env "set-car!"
+ bound <- lift $ isRecBound env "set-car!"
  if bound
   then prepareApply env cont args -- if is bound to a variable in this scope; call into it
   else do
       value <- getVar env var
       continueEval env (makeCPS env cont cpsObj) value Nothing
  where
-        cpsObj :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)
+        cpsObj :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)
         cpsObj e c obj@(Pointer _ _) x = do
           o <- derefPtr obj
           cpsObj e c o x
@@ -650,7 +651,7 @@ eval env cont args@(List [Atom "set-car!", Atom var, argObj]) = do
         cpsObj e c obj@(DottedList _ _) _ =  meval e (makeCPSWArgs e c cpsSet [obj]) argObj
         cpsObj _ _ obj _ = throwError $ TypeMismatch "pair" obj
 
-        cpsSet :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)
+        cpsSet :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)
         cpsSet e c obj (Just [List (_ : ls)]) = do
             value <- updateObject e var (List (obj : ls)) 
             continueEval e c value Nothing
@@ -659,18 +660,18 @@ eval env cont args@(List [Atom "set-car!", Atom var, argObj]) = do
             continueEval e c value Nothing
         cpsSet _ _ _ _ = throwError $ InternalError "Unexpected argument to cpsSet"
 eval env cont args@(List [Atom "set-car!" , nonvar , _ ]) = do
- bound <- liftIO $ isRecBound env "set-car!"
+ bound <- lift $ isRecBound env "set-car!"
  if bound
   then prepareApply env cont args -- if is bound to a variable in this scope; call into it
   else throwError $ TypeMismatch "variable" nonvar
 eval env cont fargs@(List (Atom "set-car!" : args)) = do
- bound <- liftIO $ isRecBound env "set-car!"
+ bound <- lift $ isRecBound env "set-car!"
  if bound
   then prepareApply env cont fargs -- if is bound to a variable in this scope; call into it
   else throwError $ NumArgs (Just 2) args
 
 eval env cont args@(List [Atom "set-cdr!", Atom var, argObj]) = do
- bound <- liftIO $ isRecBound env "set-cdr!"
+ bound <- lift $ isRecBound env "set-cdr!"
  if bound
   then prepareApply env cont args -- if is bound to a variable in this scope; call into it
   else do
@@ -678,7 +679,7 @@ eval env cont args@(List [Atom "set-cdr!", Atom var, argObj]) = do
       derefValue <- derefPtr value
       continueEval env (makeCPS env cont cpsObj) derefValue Nothing
  where
-        cpsObj :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)
+        cpsObj :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)
         cpsObj _ _ pair@(List []) _ = throwError $ TypeMismatch "pair" pair
         cpsObj e c pair@(List (_ : _)) _ = meval e (makeCPSWArgs e c cpsSet [pair]) argObj
         cpsObj e c pair@(DottedList _ _) _ = meval e (makeCPSWArgs e c cpsSet [pair]) argObj
@@ -690,90 +691,90 @@ eval env cont args@(List [Atom "set-cdr!", Atom var, argObj]) = do
             value <- (cons [l', obj']) >>= updateObject e var 
             continueEval e c value Nothing
 
-        cpsSet :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)
+        cpsSet :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)
         cpsSet e c obj (Just [List (l : _)]) = updateCdr e c obj l
         cpsSet e c obj (Just [DottedList (l : _) _]) = updateCdr e c obj l
         cpsSet _ _ _ _ = throwError $ InternalError "Unexpected argument to cpsSet"
 eval env cont args@(List [Atom "set-cdr!" , nonvar , _ ]) = do
- bound <- liftIO $ isRecBound env "set-cdr!"
+ bound <- lift $ isRecBound env "set-cdr!"
  if bound
   then prepareApply env cont args -- if is bound to a variable in this scope; call into it
   else do
       -- TODO: eval nonvar, then can process it if we get a list
       throwError $ TypeMismatch "variable" nonvar
 eval env cont fargs@(List (Atom "set-cdr!" : args)) = do
- bound <- liftIO $ isRecBound env "set-cdr!"
+ bound <- lift $ isRecBound env "set-cdr!"
  if bound
   then prepareApply env cont fargs -- if is bound to a variable in this scope; call into it
   else throwError $ NumArgs (Just 2) args
 
 eval env cont args@(List [Atom "list-set!", Atom var, i, object]) = do
- bound <- liftIO $ isRecBound env "list-set!"
+ bound <- lift $ isRecBound env "list-set!"
  if bound
   then prepareApply env cont args -- if is bound to a variable in this scope; call into it
   else meval env (makeCPS env cont $ createObjSetCPS var object updateList) i
 
 eval env cont args@(List [Atom "list-set!" , nonvar , _ , _]) = do 
- bound <- liftIO $ isRecBound env "list-set!"
+ bound <- lift $ isRecBound env "list-set!"
  if bound
   then prepareApply env cont args -- if is bound to a variable in this scope; call into it
   else throwError $ TypeMismatch "variable" nonvar
 eval env cont fargs@(List (Atom "list-set!" : args)) = do 
- bound <- liftIO $ isRecBound env "list-set!"
+ bound <- lift $ isRecBound env "list-set!"
  if bound
   then prepareApply env cont fargs -- if is bound to a variable in this scope; call into it
   else throwError $ NumArgs (Just 3) args
 
 eval env cont args@(List [Atom "vector-set!", Atom var, i, object]) = do
- bound <- liftIO $ isRecBound env "vector-set!"
+ bound <- lift $ isRecBound env "vector-set!"
  if bound
   then prepareApply env cont args -- if is bound to a variable in this scope; call into it
   else meval env (makeCPS env cont $ createObjSetCPS var object updateVector) i
 eval env cont args@(List [Atom "vector-set!" , nonvar , _ , _]) = do 
- bound <- liftIO $ isRecBound env "vector-set!"
+ bound <- lift $ isRecBound env "vector-set!"
  if bound
   then prepareApply env cont args -- if is bound to a variable in this scope; call into it
   else throwError $ TypeMismatch "variable" nonvar
 eval env cont fargs@(List (Atom "vector-set!" : args)) = do 
- bound <- liftIO $ isRecBound env "vector-set!"
+ bound <- lift $ isRecBound env "vector-set!"
  if bound
   then prepareApply env cont fargs -- if is bound to a variable in this scope; call into it
   else throwError $ NumArgs (Just 3) args
 
 eval env cont args@(List [Atom "bytevector-u8-set!", Atom var, i, object]) = do
- bound <- liftIO $ isRecBound env "bytevector-u8-set!"
+ bound <- lift $ isRecBound env "bytevector-u8-set!"
  if bound
   then prepareApply env cont args -- if is bound to a variable in this scope; call into it
   else meval env (makeCPS env cont $ createObjSetCPS var object updateByteVector) i
 
 eval env cont args@(List [Atom "bytevector-u8-set!" , nonvar , _ , _]) = do 
- bound <- liftIO $ isRecBound env "bytevector-u8-set!"
+ bound <- lift $ isRecBound env "bytevector-u8-set!"
  if bound
   then prepareApply env cont args -- if is bound to a variable in this scope; call into it
   else throwError $ TypeMismatch "variable" nonvar
 eval env cont fargs@(List (Atom "bytevector-u8-set!" : args)) = do 
- bound <- liftIO $ isRecBound env "bytevector-u8-set!"
+ bound <- lift $ isRecBound env "bytevector-u8-set!"
  if bound
   then prepareApply env cont fargs -- if is bound to a variable in this scope; call into it
   else throwError $ NumArgs (Just 3) args
 
 eval env cont args@(List [Atom "hash-table-set!", Atom var, rkey, rvalue]) = do
- bound <- liftIO $ isRecBound env "hash-table-set!"
+ bound <- lift $ isRecBound env "hash-table-set!"
  if bound
   then prepareApply env cont args -- if is bound to a variable in this scope; call into it
   else meval env (makeCPS env cont cpsValue) rkey
  where
-        cpsValue :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)
+        cpsValue :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)
         cpsValue e c key _ = meval e (makeCPSWArgs e c cpsH [key]) rvalue
 
-        cpsH :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)
+        cpsH :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)
         cpsH e c value (Just [key]) = do
           v <- getVar e var
           derefVar <- derefPtr v
           meval e (makeCPSWArgs e c cpsEvalH [key, value]) derefVar
         cpsH _ _ _ _ = throwError $ InternalError "Invalid argument to cpsH"
 
-        cpsEvalH :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)
+        cpsEvalH :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)
         cpsEvalH e c h (Just [key, value]) = do
             case h of
                 HashTable ht -> do
@@ -781,29 +782,29 @@ eval env cont args@(List [Atom "hash-table-set!", Atom var, rkey, rvalue]) = do
                 other -> throwError $ TypeMismatch "hash-table" other
         cpsEvalH _ _ _ _ = throwError $ InternalError "Invalid argument to cpsEvalH"
 eval env cont args@(List [Atom "hash-table-set!" , nonvar , _ , _]) = do
- bound <- liftIO $ isRecBound env "hash-table-set!"
+ bound <- lift $ isRecBound env "hash-table-set!"
  if bound
   then prepareApply env cont args -- if is bound to a variable in this scope; call into it
   else throwError $ TypeMismatch "variable" nonvar
 eval env cont fargs@(List (Atom "hash-table-set!" : args)) = do
- bound <- liftIO $ isRecBound env "hash-table-set!"
+ bound <- lift $ isRecBound env "hash-table-set!"
  if bound
   then prepareApply env cont fargs -- if is bound to a variable in this scope; call into it
   else throwError $ NumArgs (Just 3) args
 
 eval env cont args@(List [Atom "hash-table-delete!", Atom var, rkey]) = do
- bound <- liftIO $ isRecBound env "hash-table-delete!"
+ bound <- lift $ isRecBound env "hash-table-delete!"
  if bound
   then prepareApply env cont args -- if is bound to a variable in this scope; call into it
   else meval env (makeCPS env cont cpsH) rkey
  where
-        cpsH :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)
+        cpsH :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)
         cpsH e c key _ = do
             value <- getVar e var
             derefValue <- derefPtr value
             meval e (makeCPSWArgs e c cpsEvalH $ [key]) derefValue
 
-        cpsEvalH :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)
+        cpsEvalH :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)
         cpsEvalH e c h (Just [key]) = do
             case h of
                 HashTable ht -> do
@@ -811,12 +812,12 @@ eval env cont args@(List [Atom "hash-table-delete!", Atom var, rkey]) = do
                 other -> throwError $ TypeMismatch "hash-table" other
         cpsEvalH _ _ _ _ = throwError $ InternalError "Invalid argument to cpsEvalH"
 eval env cont args@(List [Atom "hash-table-delete!" , nonvar , _]) = do
- bound <- liftIO $ isRecBound env "hash-table-delete!"
+ bound <- lift $ isRecBound env "hash-table-delete!"
  if bound
   then prepareApply env cont args -- if is bound to a variable in this scope; call into it
   else throwError $ TypeMismatch "variable" nonvar
 eval env cont fargs@(List (Atom "hash-table-delete!" : args)) = do
- bound <- liftIO $ isRecBound env "hash-table-delete!"
+ bound <- lift $ isRecBound env "hash-table-delete!"
  if bound
   then prepareApply env cont fargs -- if is bound to a variable in this scope; call into it
   else throwError $ NumArgs (Just 2) args
@@ -825,7 +826,7 @@ eval env cont args@(List (_ : _)) = mprepareApply env cont args
 eval _ _ badForm = throwError $ BadSpecialForm "Unrecognized special form" badForm
 
 -- |A helper function for the special form /(string-set!)/
-substr :: (LispVal r, LispVal r, LispVal r) -> IOThrowsError r (LispVal r) 
+substr :: Monad m => (LispVal m r, LispVal m r, LispVal m r) -> IOThrowsError m r (LispVal m r) 
 substr (String str, Char char, Number ii) = do
                       return $ String $ (take (fromInteger ii) . drop 0) str ++
                                [char] ++
@@ -840,7 +841,7 @@ replaceAtIndex :: forall a. Int -> a -> [a] -> [a]
 replaceAtIndex n item ls = a ++ (item:b) where (a, (_:b)) = splitAt n ls
 
 -- |A helper function for /(list-set!)/
-updateList :: ReadRef r IO => LispVal r -> LispVal r -> LispVal r -> IOThrowsError r (LispVal r)
+updateList :: ReadRef r m => LispVal m r -> LispVal m r -> LispVal m r -> IOThrowsError m r (LispVal m r)
 updateList (List list) (Number idx) obj = do
     return $ List $ replaceAtIndex (fromInteger idx) obj list
 updateList ptr@(Pointer _ _) i obj = do
@@ -849,7 +850,7 @@ updateList ptr@(Pointer _ _) i obj = do
 updateList l _ _ = throwError $ TypeMismatch "list" l
 
 -- |A helper function for the special form /(vector-set!)/
-updateVector :: ReadRef r IO => LispVal r -> LispVal r -> LispVal r -> IOThrowsError r (LispVal r)
+updateVector :: ReadRef r m => LispVal m r -> LispVal m r -> LispVal m r -> IOThrowsError m r (LispVal m r)
 updateVector (Vector vec) (Number idx) obj = return $ Vector $ vec // [(fromInteger idx, obj)]
 updateVector ptr@(Pointer _ _) i obj = do
   vec <- derefPtr ptr
@@ -857,7 +858,7 @@ updateVector ptr@(Pointer _ _) i obj = do
 updateVector v _ _ = throwError $ TypeMismatch "vector" v
 
 -- |A helper function for the special form /(bytevector-u8-set!)/
-updateByteVector :: ReadRef r IO => LispVal r -> LispVal r -> LispVal r -> IOThrowsError r (LispVal r)
+updateByteVector :: ReadRef r m => LispVal m r -> LispVal m r -> LispVal m r -> IOThrowsError m r (LispVal m r)
 updateByteVector (ByteVector vec) (Number idx) obj = 
     case obj of
         Number byte -> do
@@ -871,43 +872,43 @@ updateByteVector ptr@(Pointer _ _) i obj = do
 updateByteVector v _ _ = throwError $ TypeMismatch "bytevector" v
 
 -- |Helper function to perform CPS for vector-set! and similar forms
-createObjSetCPS :: forall r. (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r)
+createObjSetCPS :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r)
                 => String
-                -> LispVal r
-                -> (LispVal r -> LispVal r -> LispVal r -> IOThrowsError r (LispVal r))
-                -> Env r
-                -> LispVal r
-                -> LispVal r
-                -> Maybe [LispVal r]
-                -> IOThrowsError r (LispVal r)
+                -> LispVal m r
+                -> (LispVal m r -> LispVal m r -> LispVal m r -> IOThrowsError m r (LispVal m r))
+                -> Env m r
+                -> LispVal m r
+                -> LispVal m r
+                -> Maybe [LispVal m r]
+                -> IOThrowsError m r (LispVal m r)
 createObjSetCPS var object updateFnc = cpsIndex
   where
     -- Update data structure at given index, with given object
-    cpsUpdateStruct :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)
+    cpsUpdateStruct :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)
     cpsUpdateStruct e c struct (Just [idx, obj]) = do
         value <- updateFnc struct idx obj >>= updateObject e var
         continueEval e c value Nothing
     cpsUpdateStruct _ _ _ _ = throwError $ InternalError "Invalid argument to cpsUpdateStruct"
 
     -- Receive index/object, retrieve variable containing data structure
-    cpsGetVar :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)
+    cpsGetVar :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)
     cpsGetVar e c obj (Just [idx]) = (meval e (makeCPSWArgs e c cpsUpdateStruct [idx, obj]) =<< getVar e var)
     cpsGetVar _ _ _ _ = throwError $ InternalError "Invalid argument to cpsGetVar"
 
     -- Receive and pass index
-    cpsIndex :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)
+    cpsIndex :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)
     cpsIndex e c idx _ = meval e (makeCPSWArgs e c cpsGetVar [idx]) object
 
 {- Prepare for apply by evaluating each function argument,
    and then execute the function via 'apply' -}
-prepareApply :: forall r. (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => Env r -> LispVal r -> LispVal r -> IOThrowsError r (LispVal r)
+prepareApply :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> LispVal m r -> LispVal m r -> IOThrowsError m r (LispVal m r)
 prepareApply env (Continuation clo cc nc dw cstk) fnc@(List (function : functionArgs)) = do
   eval env 
        (makeCPSWArgs env (Continuation clo cc nc dw $! addToCallHistory fnc cstk) 
                      cpsPrepArgs functionArgs) 
        function
  where
-       cpsPrepArgs :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)
+       cpsPrepArgs :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)
        cpsPrepArgs e c func args' = do
 -- case (trace ("prep eval of args: " ++ show args) args) of
           let args = case args' of
@@ -924,7 +925,7 @@ prepareApply env (Continuation clo cc nc dw cstk) fnc@(List (function : function
         - Function to apply when args are ready
         - List of evaluated parameters
         - List of parameters awaiting evaluation -}
-       cpsEvalArgs :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)
+       cpsEvalArgs :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)
        cpsEvalArgs e c evaledArg (Just [func, List argsEvaled, List argsRemaining]) =
           case argsRemaining of
             [] -> apply c func (argsEvaled ++ [evaledArg])
@@ -936,11 +937,11 @@ prepareApply env (Continuation clo cc nc dw cstk) fnc@(List (function : function
 prepareApply _ _ _ = throwError $ Default "Unexpected error in prepareApply"
 
 -- |Call into a Scheme function
-apply :: forall r. (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r)
-      => LispVal r  -- ^ Current continuation
-      -> LispVal r  -- ^ Function or continuation to execute
-      -> [LispVal r] -- ^ Arguments
-      -> IOThrowsError r (LispVal r) -- ^ Final value of computation
+apply :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r)
+      => LispVal m r  -- ^ Current continuation
+      -> LispVal m r  -- ^ Function or continuation to execute
+      -> [LispVal m r] -- ^ Arguments
+      -> IOThrowsError m r (LispVal m r) -- ^ Final value of computation
 apply _ cont@(Continuation env _ _ ndynwind _) args = do
 -- case (trace ("calling into continuation. dynWind = " ++ show ndynwind) ndynwind) of
   case ndynwind of
@@ -948,7 +949,7 @@ apply _ cont@(Continuation env _ _ ndynwind _) args = do
     Just [DynamicWinders beforeFunc _] -> apply (makeCPS env cont cpsApply) beforeFunc []
     _ -> doApply env cont
  where
-   cpsApply :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)
+   cpsApply :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)
    cpsApply e c _ _ = doApply e c
    doApply e c = do
       case (toInteger $ length args) of
@@ -995,7 +996,7 @@ apply cont (Func aparams avarargs abody aclosure) args =
   if (num aparams /= num args && isNothing avarargs) ||
      (num aparams > num args && isJust avarargs)
      then throwError $ NumArgs (Just (num aparams)) args
-     else liftIO (extendEnv aclosure $ zip (map ((,) varNamespace) aparams) args) >>= bindVarArgs avarargs >>= (evalBody abody)
+     else lift (extendEnv aclosure $ zip (map ((,) varNamespace) aparams) args) >>= bindVarArgs avarargs >>= (evalBody abody)
   where remainingArgs = drop (length aparams) args
         num = toInteger . length
         --
@@ -1023,13 +1024,13 @@ apply cont (Func aparams avarargs abody aclosure) args =
             continueEval cwcEnv (Continuation cwcEnv (Just (SchemeBody cwcBody)) (Just cwcCont) cwcDynWind cStack) (Nil "") Nothing
 
         bindVarArgs arg env = case arg of
-          Just argName -> liftIO $ extendEnv env [((varNamespace, argName), List remainingArgs)]
+          Just argName -> lift $ extendEnv env [((varNamespace, argName), List remainingArgs)]
           Nothing -> return env
 apply cont (HFunc aparams avarargs abody aclosure) args =
   if (num aparams /= num args && isNothing avarargs) ||
      (num aparams > num args && isJust avarargs)
      then throwError $ NumArgs (Just (num aparams)) args
-     else liftIO (extendEnv aclosure $ zip (map ((,) varNamespace) aparams) args) >>= bindVarArgs avarargs >>= (evalBody abody)
+     else lift (extendEnv aclosure $ zip (map ((,) varNamespace) aparams) args) >>= bindVarArgs avarargs >>= (evalBody abody)
   where remainingArgs = drop (length aparams) args
         num = toInteger . length
         evalBody evBody env = evBody env cont (Nil "") (Just [])
@@ -1046,7 +1047,7 @@ apply cont (HFunc aparams avarargs abody aclosure) args =
             continueEval cwcEnv (Continuation cwcEnv (Just (SchemeBody cwcBody)) (Just cwcCont) Nothing cwcDynWind) $ Nil ""-}
 
         bindVarArgs arg env = case arg of
-          Just argName -> liftIO $ extendEnv env [((varNamespace, argName), List $ remainingArgs)]
+          Just argName -> lift $ extendEnv env [((varNamespace, argName), List $ remainingArgs)]
           Nothing -> return env
 apply _ func args = do
   List [func'] <- recDerefPtrs $ List [func] -- Deref any pointers
@@ -1060,7 +1061,7 @@ apply _ func args = do
 --
 --  For the purposes of using husk as an extension language, /r5rsEnv/ will
 --  probably be more useful.
-primitiveBindings :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => IO (Env r)
+primitiveBindings :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => m (Env m r)
 primitiveBindings = nullEnv >>= 
     flip extendEnv  ( map (domakeFunc IOFunc) ioPrimitives
                    ++ map (domakeFunc EvalFunc) evalFunctions
@@ -1068,7 +1069,7 @@ primitiveBindings = nullEnv >>=
   where domakeFunc constructor (var, func) = 
             ((varNamespace, var), constructor func)
 
---baseBindings :: IO (Env r)
+--baseBindings :: m (Env m r)
 --baseBindings = nullEnv >>= 
 --    (flip extendEnv $ map (domakeFunc EvalFunc) evalFunctions)
 --  where domakeFunc constructor (var, func) = 
@@ -1076,14 +1077,14 @@ primitiveBindings = nullEnv >>=
 
 -- |An empty environment with the %import function. This is presently
 --  just intended for internal use by the compiler.
-nullEnvWithImport :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => IO (Env r)
+nullEnvWithImport :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => m (Env m r)
 nullEnvWithImport = nullEnv >>= 
   (flip extendEnv [
     ((varNamespace, "%import"), EvalFunc evalfuncImport),
     ((varNamespace, "hash-table-ref"), IOFunc $ wrapHashTbl hashTblRef)])
 
 -- |Load the standard r5rs environment, including libraries
-r5rsEnv :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => IO (Env r)
+r5rsEnv :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => m (Env m r)
 r5rsEnv = do
   env <- r5rsEnv'
   -- Bit of a hack to load (import)
@@ -1093,11 +1094,11 @@ r5rsEnv = do
 
 -- |Load the standard r5rs environment, including libraries,
 --  but do not create the (import) binding
-r5rsEnv' :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => IO (Env r)
+r5rsEnv' :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => m (Env m r)
 r5rsEnv' = do
   env <- primitiveBindings
-  stdlib <- PHS.getDataFileName "lib/stdlib.scm"
-  srfi55 <- PHS.getDataFileName "lib/srfi/srfi-55.scm" -- (require-extension)
+  stdlib <- liftIO $ PHS.getDataFileName "lib/stdlib.scm"
+  srfi55 <- liftIO $ PHS.getDataFileName "lib/srfi/srfi-55.scm" -- (require-extension)
   
   -- Load standard library
   features <- getHuskFeatures
@@ -1106,11 +1107,11 @@ r5rsEnv' = do
 
   -- Load (require-extension), which can be used to load other SRFI's
   _ <- evalString env $ "(load \"" ++ (escapeBackslashes srfi55) ++ "\")"
-  registerExtensions env PHS.getDataFileName
+  registerExtensions env $ liftIO . PHS.getDataFileName
 
 #ifdef UseLibraries
   -- Load module meta-language 
-  metalib <- PHS.getDataFileName "lib/modules.scm"
+  metalib <- liftIO $ PHS.getDataFileName "lib/modules.scm"
   metaEnv <- nullEnvWithParent env -- Load env as parent of metaenv
   _ <- evalString metaEnv $ "(load \"" ++ (escapeBackslashes metalib) ++ "\")"
   -- Load meta-env so we can find it later
@@ -1119,7 +1120,7 @@ r5rsEnv' = do
   _ <- evalLisp' metaEnv $ List [Atom "add-module!", List [Atom "quote", List [Atom "scheme"]], List [Atom "make-module", Bool False, LispEnv env {-baseEnv-}, List [Atom "quote", List []]]]
 --  _ <- evalString metaEnv
 --         "(add-module! '(scheme r5rs) (make-module #f (interaction-environment) '()))"
-  timeEnv <- liftIO $ r7rsTimeEnv
+  timeEnv <- r7rsTimeEnv
   _ <- evalLisp' metaEnv $ List [Atom "add-module!", List [Atom "quote", List [Atom "scheme", Atom "time", Atom "posix"]], List [Atom "make-module", Bool False, LispEnv timeEnv, List [Atom "quote", List []]]]
 
   _ <- evalLisp' metaEnv $ List [
@@ -1135,7 +1136,7 @@ r5rsEnv' = do
 --
 --  Note that the only difference between this and the r5rs equivalent is that
 --  slightly less Scheme code is loaded initially.
-r7rsEnv :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => IO (Env r)
+r7rsEnv :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => m (Env m r)
 r7rsEnv = do
   env <- r7rsEnv'
   -- Bit of a hack to load (import)
@@ -1144,7 +1145,7 @@ r7rsEnv = do
   return env
 -- |Load the standard r7rs environment
 --
-r7rsEnv' :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => IO (Env r)
+r7rsEnv' :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => m (Env m r)
 r7rsEnv' = do
   -- TODO: longer term, will need r7rs bindings instead of these
   -- basically want to limit the base bindings to the absolute minimum, but
@@ -1156,9 +1157,9 @@ r7rsEnv' = do
   -- Unfortunately this adds them in the top-level environment (!!)
   features <- getHuskFeatures
   _ <- evalString env $ "(define *features* '" ++ show (List features) ++ ")"
-  cxr <- PHS.getDataFileName "lib/cxr.scm"
+  cxr <- liftIO $ PHS.getDataFileName "lib/cxr.scm"
   _ <- evalString env {-baseEnv-} $ "(load \"" ++ (escapeBackslashes cxr) ++ "\")" 
-  core <- PHS.getDataFileName "lib/core.scm"
+  core <- liftIO $ PHS.getDataFileName "lib/core.scm"
   _ <- evalString env {-baseEnv-} $ "(load \"" ++ (escapeBackslashes core) ++ "\")" 
 
 -- TODO: probably will have to load some scheme libraries for modules.scm to work
@@ -1166,7 +1167,7 @@ r7rsEnv' = do
 
 #ifdef UseLibraries
   -- Load module meta-language 
-  metalib <- PHS.getDataFileName "lib/modules.scm"
+  metalib <- liftIO $ PHS.getDataFileName "lib/modules.scm"
   metaEnv <- nullEnvWithParent env -- Load env as parent of metaenv
   _ <- evalString metaEnv $ "(load \"" ++ (escapeBackslashes metalib) ++ "\")"
   -- Load meta-env so we can find it later
@@ -1174,7 +1175,7 @@ r7rsEnv' = do
   -- Load base primitives
   _ <- evalLisp' metaEnv $ List [Atom "add-module!", List [Atom "quote", List [Atom "scheme"]], List [Atom "make-module", Bool False, LispEnv env {-baseEnv-}, List [Atom "quote", List []]]]
 
-  timeEnv <- liftIO $ r7rsTimeEnv
+  timeEnv <- r7rsTimeEnv
   _ <- evalLisp' metaEnv $ List [Atom "add-module!", List [Atom "quote", List [Atom "scheme", Atom "time", Atom "posix"]], List [Atom "make-module", Bool False, LispEnv timeEnv, List [Atom "quote", List []]]]
 
   _ <- evalLisp' metaEnv $ List [
@@ -1187,7 +1188,7 @@ r7rsEnv' = do
   return env
 
 -- | Load haskell bindings used for the r7rs time library
-r7rsTimeEnv :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => IO (Env r)
+r7rsTimeEnv :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => m (Env m r)
 r7rsTimeEnv = do
     nullEnv >>= 
      (flip extendEnv 
@@ -1196,12 +1197,22 @@ r7rsTimeEnv = do
 -- Functions that extend the core evaluator, but that can be defined separately.
 --
 {- These functions have access to the current environment via the
-current continuation, which is passed as the first LispVal r argument. -}
+current continuation, which is passed as the first LispVal m r argument. -}
 --
-evalfuncExitSuccess, evalfuncExitFail, evalfuncApply, evalfuncDynamicWind,
-  evalfuncEval, evalfuncLoad, evalfuncCallCC, evalfuncCallWValues,
-  evalfuncMakeEnv, evalfuncNullEnv, evalfuncUseParentEnv, evalfuncExit,
-  evalfuncInteractionEnv, evalfuncImport :: forall r. (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+evalfuncExitSuccess :: forall m r. (MonadIO m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
+evalfuncExitFail :: forall m r. (MonadIO m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
+evalfuncApply :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
+evalfuncDynamicWind :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
+evalfuncEval :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
+evalfuncLoad :: forall m r. (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
+evalfuncCallCC :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
+evalfuncCallWValues :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
+evalfuncMakeEnv :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
+evalfuncNullEnv :: forall m r. (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
+evalfuncUseParentEnv :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
+evalfuncExit :: forall m r. (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
+evalfuncInteractionEnv :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
+evalfuncImport :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 
 {-
  - A (somewhat) simplified implementation of dynamic-wind
@@ -1224,7 +1235,7 @@ evalfuncExitSuccess, evalfuncExitFail, evalfuncApply, evalfuncDynamicWind,
 evalfuncDynamicWind [cont@(Continuation {contClosure = env}), beforeFunc, thunkFunc, afterFunc] = do
   apply (makeCPS env cont cpsThunk) beforeFunc []
  where
-   cpsThunk, cpsAfter :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)
+   cpsThunk, cpsAfter :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)
    cpsThunk e (Continuation ce cc cnc _ cs) _ _ = 
      apply (Continuation e (Just (HaskellBody cpsAfter Nothing))
                            (Just (Continuation ce cc cnc Nothing cs))
@@ -1233,7 +1244,7 @@ evalfuncDynamicWind [cont@(Continuation {contClosure = env}), beforeFunc, thunkF
            thunkFunc []
    cpsThunk _ _ _ _ = throwError $ Default "Unexpected error in cpsThunk during (dynamic-wind)"
    cpsAfter _ c value _ = do
-    let cpsRetVals :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)
+    let cpsRetVals :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)
         cpsRetVals e cc _ xargs = continueEval e cc value xargs
     apply (makeCPS env c cpsRetVals) afterFunc [] -- FUTURE: remove dynamicWinder from above from the list before calling after
 evalfuncDynamicWind (_ : args) = throwError $ NumArgs (Just 3) args -- Skip over continuation argument
@@ -1263,7 +1274,7 @@ evalfuncExit args = throwError $ InternalError $ "Invalid arguments to exit: " +
 evalfuncCallWValues [cont@(Continuation {contClosure = env}), producer, consumer] = do
   apply (makeCPS env cont cpsEval) producer [] -- Call into prod to get values
  where
-   cpsEval :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)
+   cpsEval :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)
    cpsEval _ c@(Continuation {}) value (Just xargs) = apply c consumer (value : xargs)
    cpsEval _ c value _ = apply c consumer [value]
 evalfuncCallWValues (_ : args) = throwError $ NumArgs (Just 2) args -- Skip over continuation argument
@@ -1289,12 +1300,12 @@ evalfuncApply _ = throwError $ NumArgs (Just 2) []
 
 
 evalfuncMakeEnv (cont@(Continuation {contClosure = env}) : _) = do
-    e <- liftIO nullEnv
+    e <- lift nullEnv
     continueEval env cont (LispEnv e) Nothing
 evalfuncMakeEnv _ = throwError $ NumArgs (Just 1) []
 
 evalfuncNullEnv [cont@(Continuation {contClosure = env}), Number _] = do
-    nilEnv <- liftIO primitiveBindings
+    nilEnv <- lift primitiveBindings
     continueEval env cont (LispEnv nilEnv) Nothing
 evalfuncNullEnv (_ : args) = throwError $ NumArgs (Just 1) args -- Skip over continuation argument
 evalfuncNullEnv _ = throwError $ NumArgs (Just 1) []
@@ -1340,7 +1351,7 @@ evalfuncImport [
         _ -> throwError $ InternalError ""
  where 
    exportAll toEnv' = do
-     newEnv <- liftIO $ importEnv toEnv' fromEnv
+     newEnv <- lift $ importEnv toEnv' fromEnv
      continueEval
          env 
         (Continuation env a b c d) 
@@ -1353,7 +1364,7 @@ evalfuncImport ((Continuation {} ) : cs) = do
 evalfuncImport _ = throwError $ InternalError ""
 
 -- |Load import into the main environment
-bootstrapImport :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => [LispVal r] -> IOThrowsError r (LispVal r)
+bootstrapImport :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 bootstrapImport [cont@(Continuation {contClosure = env})] = do
     LispEnv me <- getVar env "*meta-env*"
     ri <- getNamespacedVar me macroNamespace "repl-import"
@@ -1419,7 +1430,7 @@ evalfuncExitSuccess _ = do
   return $ Nil ""
 
 {- Primitive functions that extend the core evaluator -}
-evalFunctions :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => [(String, [LispVal r] -> IOThrowsError r (LispVal r))]
+evalFunctions :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [(String, [LispVal m r] -> ExceptT (LispError m r) m (LispVal m r))]
 evalFunctions =  [  ("apply", evalfuncApply)
                   , ("call-with-current-continuation", evalfuncCallCC)
                   , ("call-with-values", evalfuncCallWValues)
@@ -1447,13 +1458,13 @@ evalFunctions =  [  ("apply", evalfuncApply)
                 ]
 
 -- | Rethrow given error with call history, if available
-throwErrorWithCallHistory :: LispVal r -> LispError r -> IOThrowsError r (LispVal r)
+throwErrorWithCallHistory :: Monad m => LispVal m r -> LispError m r -> IOThrowsError m r (LispVal m r)
 throwErrorWithCallHistory (Continuation {contCallHist=cstk}) e = do
     throwError $ ErrorWithCallHist e cstk
 throwErrorWithCallHistory _ e = throwError e
 
 -- | Add a function to the call history
-addToCallHistory :: LispVal r -> [LispVal r] -> [LispVal r]
+addToCallHistory :: LispVal m r -> [LispVal m r] -> [LispVal m r]
 addToCallHistory f history 
   | null history = [f]
   | otherwise = (lastN' 9 history) ++ [f]

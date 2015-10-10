@@ -13,12 +13,13 @@ A front-end for the husk compiler
 
 module Main where
 import Paths_husk_scheme
+import Language.Scheme.Primitives (MonadSerial)
 import Language.Scheme.Compiler
 import Language.Scheme.Compiler.Types
 import qualified Language.Scheme.Core
 import Language.Scheme.Types     -- Scheme data types
 import Language.Scheme.Variables -- Scheme variable operations
-import Control.Monad.Error
+import Control.Monad.Except
 import Data.Maybe (fromMaybe)
 import System.Console.GetOpt
 import System.FilePath (dropExtension)
@@ -138,7 +139,7 @@ showVersion _ = do
 -- |High level code to compile the given file
 process :: String -> String -> String -> Bool -> Bool -> String -> String -> Bool -> IO ()
 process inFile outHaskell outExec libs dynamic extraArgs langrev debugOpt = do
-  env :: Env IORef <- case langrev of
+  env :: Env IO IORef <- case langrev of
             "7" -> Language.Scheme.Core.r7rsEnv'
             _ -> Language.Scheme.Core.r5rsEnv'
   stdlib <- getDataFileName "lib/stdlib.scm"
@@ -154,9 +155,9 @@ process inFile outHaskell outExec libs dynamic extraArgs langrev debugOpt = do
    _ -> compileHaskellFile outHaskell outExec dynamic extraArgs
 
 -- |Compile a scheme file to haskell
-compileSchemeFile :: (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r) => Env r -> Maybe String -> String -> String -> String -> String -> Bool -> IOThrowsError r (LispVal r)
+compileSchemeFile :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> Maybe String -> String -> String -> String -> String -> Bool -> IOThrowsError m r (LispVal m r)
 compileSchemeFile env stdlib srfi55 filename outHaskell langrev _ = do
-  let conv :: LispVal r -> String
+  let conv :: LispVal m r -> String
       conv (String s) = s
       conv l = show l
       compileLibraries = case stdlib of
@@ -173,7 +174,7 @@ compileSchemeFile env stdlib srfi55 filename outHaskell langrev _ = do
       libsC <- compileLisp env stdlib' "run" (Just "exec55")
       libSrfi55C <- compileLisp env srfi55 "exec55" (Just "exec55_3")
       --libModules <- compileLisp env moduleFile "exec55_2" (Just "exec55_3")
-      liftIO $ Language.Scheme.Core.registerExtensions env getDataFileName
+      lift $ Language.Scheme.Core.registerExtensions env $ liftIO . getDataFileName
       return (String "exec", libsC, libSrfi55C, []) --libModules)
     (_, _) -> return (String "run", [], [], [])
 
@@ -208,7 +209,7 @@ compileSchemeFile env stdlib srfi55 filename outHaskell langrev _ = do
      else throwError $ Default "Empty file" --putStrLn "empty file"
 
 -- |Compile the intermediate haskell file using GHC
-compileHaskellFile :: String -> String -> Bool -> String -> IO() --ThrowsError r (LispVal r)
+compileHaskellFile :: String -> String -> Bool -> String -> IO() --ThrowsError m r (LispVal m r)
 compileHaskellFile hsInFile objOutFile dynamic extraArgs = do
   let ghc = "ghc" -- Need to make configurable??
       dynamicArg = if dynamic then "-dynamic" else ""

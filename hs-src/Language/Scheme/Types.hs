@@ -5,6 +5,7 @@
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE RankNTypes #-}
 {- |
 Module      : Language.Scheme.Types
 Copyright   : Justin Ethier
@@ -123,15 +124,15 @@ import Data.Map (Map)
 -- Environment management
 
 -- |A Scheme environment containing variable bindings of form @(namespaceName, variableName), variableValue@
-data Env r = Environment {
-        parentEnv :: (Maybe (Env r)),
-        bindings :: (r (Data.Map.Map String (r (LispVal r)))),
-        pointers :: (r (Data.Map.Map String (r [LispVal r])))
+data Env m r = Environment {
+        parentEnv :: (Maybe (Env m r)),
+        bindings :: (r (Data.Map.Map String (r (LispVal m r)))),
+        pointers :: (r (Data.Map.Map String (r [LispVal m r])))
     }
 
-type PtrEq r = (Eq (r (Map String (r (LispVal r)))), Eq (r (Map String (r [LispVal r]))))
+type PtrEq m r = (Eq (r (Map String (r (LispVal m r)))), Eq (r (Map String (r [LispVal m r]))))
 
-instance PtrEq r => Eq (Env r) where
+instance PtrEq m r => Eq (Env m r) where
     (Environment _ xb xpts) == (Environment _ yb ypts) = 
       (xb == yb) && (xpts == ypts)
 
@@ -153,28 +154,37 @@ instance ReadRef IORef IO where
 instance WriteRef IORef IO where
   writeRef = writeIORef
 
+instance NewRef r m => NewRef r (ExceptT e m) where
+  newRef = lift . newRef
+
+instance ReadRef r m => ReadRef r (ExceptT e m) where
+  readRef = lift . readRef
+
+instance WriteRef r m => WriteRef r (ExceptT e m) where
+  writeRef r = lift . writeRef r
+
 -- |An empty environment
-nullEnv :: NewRef r m => m (Env r)
+nullEnv :: NewRef r m => m (Env m r)
 nullEnv = do 
     nullBindings <- newRef $ Data.Map.fromList []
     nullPointers <- newRef $ Data.Map.fromList []
     return $ Environment Nothing nullBindings nullPointers
 
 -- |Types of errors that may occur when evaluating Scheme code
-data LispError r = NumArgs (Maybe Integer) [LispVal r] -- ^Invalid number of function arguments
-  | TypeMismatch String (LispVal r) -- ^Type error
+data LispError m r = NumArgs (Maybe Integer) [LispVal m r] -- ^Invalid number of function arguments
+  | TypeMismatch String (LispVal m r) -- ^Type error
   | Parser ParseError -- ^Parsing error
-  | BadSpecialForm String (LispVal r) -- ^Invalid special (built-in) form
+  | BadSpecialForm String (LispVal m r) -- ^Invalid special (built-in) form
   | UnboundVar String String -- ^ A referenced variable has not been declared
   | DivideByZero -- ^Divide by Zero error
   | NotImplemented String -- ^ Feature is not implemented
   | InternalError String {- ^An internal error within husk; in theory user (Scheme) code
                          should never allow one of these errors to be triggered. -}
   | Default String -- ^Default error
-  | ErrorWithCallHist (LispError r) [LispVal r] -- ^Wraps an error to also include the current call history
+  | ErrorWithCallHist (LispError m r) [LispVal m r] -- ^Wraps an error to also include the current call history
 
 -- |Create a textual description for a 'LispError'
-showError :: LispError r -> String
+showError :: LispError m r -> String
 showError (NumArgs (Just expected) found) = "Expected " ++ show expected
                                   ++ " args but found " 
                                   ++ (show $ length found)
@@ -194,10 +204,10 @@ showError (InternalError message) = "An internal error occurred: " ++ message
 showError (Default message) = "Error: " ++ message
 showError (ErrorWithCallHist err stack) = showCallHistory (show err) stack
 
-instance Show (LispError r) where show = showError
+instance Show (LispError m r) where show = showError
 
 -- |Display call history for an error
-showCallHistory :: String -> [LispVal r] -> String
+showCallHistory :: String -> [LispVal m r] -> String
 showCallHistory message hist = do
   let nums :: [Int]
       nums = [0..]
@@ -207,30 +217,30 @@ showCallHistory message hist = do
                    (zip ns $ reverse hist))
 
 -- |Container used by operations that could throw an error
-type ThrowsError r = Either (LispError r)
+type ThrowsError m r = Either (LispError m r)
 
 -- |Container used to provide error handling in the IO monad
-type IOThrowsError r = ExceptT (LispError r) IO
+type IOThrowsError m r a = ExceptT (LispError m r) m a
 
 -- |Lift a ThrowsError into the IO monad
-liftThrows :: ThrowsError r a -> IOThrowsError r a
+liftThrows :: Monad m => ThrowsError m r a -> IOThrowsError m r a
 liftThrows (Left err) = throwError err
 liftThrows (Right val) = return val
 
 -- type LispVal = LispVal IORef
 
 -- |Scheme data types
-data LispVal r = Atom String
+data LispVal m r = Atom String
  -- ^Symbol
- | List [LispVal r]
+ | List [LispVal m r]
  -- ^List
- | DottedList [LispVal r] (LispVal r)
+ | DottedList [LispVal m r] (LispVal m r)
  -- ^Pair
- | Vector (Array Int (LispVal r))
+ | Vector (Array Int (LispVal m r))
  -- ^Vector
  | ByteVector BS.ByteString
  -- ^ByteVector from R7RS
- | HashTable (Data.Map.Map (LispVal r) (LispVal r))
+ | HashTable (Data.Map.Map (LispVal m r) (LispVal m r))
  {- ^Hash table.
  Technically this could be a derived data type instead of being built-in to the
  interpreter. And perhaps in the future it will be. But for now, a hash table
@@ -254,50 +264,50 @@ data LispVal r = Atom String
  -- ^Character
  | Bool Bool
  -- ^Boolean
- | PrimitiveFunc ([LispVal r] -> ThrowsError r (LispVal r))
+ | PrimitiveFunc ([LispVal m r] -> ThrowsError m r (LispVal m r))
  -- ^Primitive function
  | Func {params :: [String],
          vararg :: (Maybe String),
-         body :: [LispVal r],
-         closure :: Env r
+         body :: [LispVal m r],
+         closure :: Env m r
         }
  -- ^Function written in Scheme
  | HFunc {hparams :: [String],
           hvararg :: (Maybe String),
-          hbody :: (Env r -> (LispVal r) -> (LispVal r) -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)),
-          hclosure :: Env r
+          hbody :: (Env m r -> (LispVal m r) -> (LispVal m r) -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)),
+          hclosure :: Env m r
         }
  -- ^Function formed from a Haskell function
- | IOFunc ([LispVal r] -> IOThrowsError r (LispVal r))
+ | IOFunc ([LispVal m r] -> IOThrowsError m r (LispVal m r))
  -- ^Primitive function within the IO monad
- | EvalFunc ([LispVal r] -> IOThrowsError r (LispVal r))
+ | EvalFunc ([LispVal m r] -> IOThrowsError m r (LispVal m r))
  {- ^Function within the IO monad with access to
  the current environment and continuation. -}
- | CustFunc ([LispVal r] -> IOThrowsError r (LispVal r))
+ | CustFunc ([LispVal m r] -> IOThrowsError m r (LispVal m r))
  -- ^A custom function written by code outside of husk.
  --  Any code that uses the Haskell API should define custom
  --  functions using this data type.
  | Pointer { pointerVar :: String
-            ,pointerEnv :: Env r } 
+            ,pointerEnv :: Env m r } 
  -- ^Pointer to an environment variable.
  | Opaque Dynamic
  -- ^Opaque Haskell value.
  | Port Handle (Maybe DK.Knob)
  -- ^I/O port
- | Continuation {  contClosure :: Env r             -- Environment of the continuation
-                 , currentCont :: (Maybe (DeferredCode r))  -- Code of current continuation
-                 , nextCont :: (Maybe (LispVal r))          -- Code to resume after body of cont
-                 , dynamicWind :: (Maybe [DynamicWinders r]) -- Functions injected by (dynamic-wind)
-                 , contCallHist :: [LispVal r] -- Active call history
+ | Continuation {  contClosure :: Env m r             -- Environment of the continuation
+                 , currentCont :: (Maybe (DeferredCode m r))  -- Code of current continuation
+                 , nextCont :: (Maybe (LispVal m r))          -- Code to resume after body of cont
+                 , dynamicWind :: (Maybe [DynamicWinders m r]) -- Functions injected by (dynamic-wind)
+                 , contCallHist :: [LispVal m r] -- Active call history
                 }
  -- ^Continuation
- | Syntax { synClosure :: Maybe (Env r)       -- ^ Code env in effect at definition time, if applicable
-          , synRenameClosure :: Maybe (Env r) -- ^ Renames (from macro hygiene) in effect at def time;
+ | Syntax { synClosure :: Maybe (Env m r)       -- ^ Code env in effect at definition time, if applicable
+          , synRenameClosure :: Maybe (Env m r) -- ^ Renames (from macro hygiene) in effect at def time;
                                                   --   only applicable if this macro defined inside another macro.
           , synDefinedInMacro :: Bool             -- ^ Set if macro is defined within another macro
           , synEllipsis :: String                 -- ^ String to use as the ellipsis identifier
-          , synIdentifiers :: [LispVal r]           -- ^ Literal identifiers from syntax-rules 
-          , synRules :: [LispVal r]                 -- ^ Rules from syntax-rules
+          , synIdentifiers :: [LispVal m r]           -- ^ Literal identifiers from syntax-rules 
+          , synRules :: [LispVal m r]                 -- ^ Rules from syntax-rules
    } -- ^ Type to hold a syntax object that is created by a macro definition.
      --   Syntax objects are not used like regular types in that they are not
      --   passed around within variables. In other words, you cannot use set! to
@@ -305,9 +315,9 @@ data LispVal r = Atom String
      --   application. In any case, it is convenient to define the type here 
      --   because syntax objects are stored in the same environments and 
      --   manipulated by the same functions as regular variables.
- | SyntaxExplicitRenaming (LispVal r)
+ | SyntaxExplicitRenaming (LispVal m r)
    -- ^ Syntax for an explicit-renaming macro
- | LispEnv (Env r)
+ | LispEnv (Env m r)
    -- ^ Wrapper for a scheme environment
  | EOF
    -- ^ End of file indicator
@@ -315,16 +325,16 @@ data LispVal r = Atom String
  -- ^Internal use only; do not use this type directly.
 
 -- | Scheme /null/ value
-nullLisp :: (LispVal r)
+nullLisp :: (LispVal m r)
 nullLisp = List []
 
 -- |Convert a Haskell value to an opaque Lisp value.
-toOpaque :: Typeable a => a -> LispVal r
+toOpaque :: Typeable a => a -> LispVal m r
 toOpaque = Opaque . toDyn
 
 -- |Convert an opaque Lisp value back into a Haskell value of the appropriate
 --  type, or produce a TypeMismatch error.
-fromOpaque :: forall a r. Typeable a => LispVal r -> ThrowsError r a
+fromOpaque :: forall a m r. Typeable a => LispVal m r -> ThrowsError m r a
 -- fromOpaque (Opaque o) | isJust $ fromDynamic o = fromJust $ fromDynamic o
 -- fromOpaque badArg = throwError $ TypeMismatch (show $ toOpaque (undefined :: a)) badArg
 
@@ -333,50 +343,50 @@ fromOpaque (Opaque (fromDynamic -> Just v)) = return v
 fromOpaque badArg = throwError $ TypeMismatch (show $ toOpaque (undefined :: a)) badArg
 
 -- |Container to hold code that is passed to a continuation for deferred execution
-data DeferredCode r =
-    SchemeBody [LispVal r] | -- ^A block of Scheme code
+data DeferredCode m r =
+    SchemeBody [LispVal m r] | -- ^A block of Scheme code
     HaskellBody {
-       contFunction :: (Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r))
-     , contFunctionArgs :: (Maybe [LispVal r]) -- Arguments to the higher-order function
+       contFunction :: (Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r))
+     , contFunctionArgs :: (Maybe [LispVal m r]) -- Arguments to the higher-order function
     } -- ^A Haskell function
 
 -- |Container to store information from a dynamic-wind
-data DynamicWinders r = DynamicWinders {
-    before :: LispVal r -- ^Function to execute when resuming continuation within extent of dynamic-wind
-  , after :: LispVal r -- ^Function to execute when leaving extent of dynamic-wind
+data DynamicWinders m r = DynamicWinders {
+    before :: LispVal m r -- ^Function to execute when resuming continuation within extent of dynamic-wind
+  , after :: LispVal m r -- ^Function to execute when leaving extent of dynamic-wind
 }
 
-showDWVal :: DynamicWinders r -> String
+showDWVal :: DynamicWinders m r -> String
 showDWVal (DynamicWinders b a) = "(" ++ (show b) ++ " . " ++ (show a) ++ ")"
 
-instance Show (DynamicWinders r) where show = showDWVal
+instance Show (DynamicWinders m r) where show = showDWVal
 
 -- |Make an /empty/ continuation that does not contain any code
-makeNullContinuation :: Env r -> LispVal r
+makeNullContinuation :: Env m r -> LispVal m r
 makeNullContinuation env = Continuation env Nothing Nothing Nothing []
 
 -- |Make a continuation that takes a higher-order function (written in Haskell)
-makeCPS :: Env r
+makeCPS :: Env m r
         -- ^ Environment
-        -> LispVal r 
+        -> LispVal m r 
         -- ^ Current continuation
-        -> (Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)) 
+        -> (Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)) 
         -- ^ Haskell function
-        -> LispVal r
+        -> LispVal m r
         -- ^ The Haskell function packaged as a LispVal
 makeCPS env cont@(Continuation {contCallHist=hist}) cps = Continuation env (Just (HaskellBody cps Nothing)) (Just cont) (dynamicWind cont) hist
 makeCPS env cont cps = Continuation env (Just (HaskellBody cps Nothing)) (Just cont) Nothing [] -- This overload just here for completeness; it should never be used
 
 -- |Make a continuation that stores a higher-order function and arguments to that function
-makeCPSWArgs :: Env r
+makeCPSWArgs :: Env m r
         -- ^ Environment
-        -> LispVal r 
+        -> LispVal m r 
         -- ^ Current continuation
-        -> (Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)) 
+        -> (Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)) 
         -- ^ Haskell function
-        -> [LispVal r]
+        -> [LispVal m r]
         -- ^ Arguments to the function
-        -> LispVal r
+        -> LispVal m r
         -- ^ The Haskell function packaged as a LispVal
 makeCPSWArgs env cont@(Continuation {dynamicWind=dynWind,contCallHist=hist}) cps args = 
     Continuation 
@@ -390,7 +400,7 @@ makeCPSWArgs env cont cps args =
         (Just (HaskellBody cps (Just args))) 
         (Just cont) Nothing []
 
-instance Ord (LispVal r) where
+instance Ord (LispVal m r) where
   compare (Bool a) (Bool b) = compare a b
   compare (Number a) (Number b) = compare a b
   compare (Rational a) (Rational b) = compare a b
@@ -407,9 +417,9 @@ Others? -}
   compare a b = compare (show a) (show b) -- Hack (??): sort alphabetically when types differ or have no handlers
 
 -- |Compare two 'LispVal instances
-eqv :: [LispVal r] 
+eqv :: [LispVal m r] 
     -- ^ A list containing two values to compare
-    -> ThrowsError r (LispVal r)
+    -> ThrowsError m r (LispVal m r)
     -- ^ Result wrapped as a Bool
 eqv [(Bool arg1), (Bool arg2)] = return $ Bool $ arg1 == arg2
 eqv [(Number arg1), (Number arg2)] = return $ Bool $ arg1 == arg2
@@ -454,7 +464,7 @@ eqv [_, _] = return $ Bool False
 eqv badArgList = throwError $ NumArgs (Just 2) badArgList
 
 -- |Compare two lists of haskell values, using the given comparison function
-eqvList :: ([LispVal r] -> ThrowsError r (LispVal r)) -> [LispVal r] -> ThrowsError r (LispVal r)
+eqvList :: ([LispVal m r] -> ThrowsError m r (LispVal m r)) -> [LispVal m r] -> ThrowsError m r (LispVal m r)
 eqvList eqvFunc [(List arg1), (List arg2)] = 
     return $ Bool $ (length arg1 == length arg2) &&
                     all eqvPair (zip arg1 arg2)
@@ -465,7 +475,7 @@ eqvList eqvFunc [(List arg1), (List arg2)] =
 eqvList _ _ = throwError $ Default "Unexpected error in eqvList"
 
 -- |A more convenient way to call /eqv/
-eqVal :: LispVal r -> LispVal r -> Bool
+eqVal :: LispVal m r -> LispVal m r -> Bool
 eqVal a b = do
   let result = eqv [a, b]
   case result of
@@ -473,11 +483,11 @@ eqVal a b = do
     Right (Bool val) -> val
     _ -> False -- Is this OK?
 
-instance Eq (LispVal r) where
+instance Eq (LispVal m r) where
   x == y = eqVal x y
 
 -- |Create a textual description of a 'LispVal
-showVal :: LispVal r -> String
+showVal :: LispVal m r -> String
 showVal (Nil _) = ""
 showVal (EOF) = "#!EOF"
 showVal (LispEnv _) = "<env>"
@@ -517,15 +527,15 @@ showVal (Pointer p _) = "<ptr " ++ p ++ ">"
 showVal (Opaque d) = "<Haskell " ++ show (dynTypeRep d) ++ ">"
 
 -- |A helper function to make pointer deref code more concise
-box :: LispVal r -> IOThrowsError r [LispVal r]
+box :: Monad m => LispVal m r -> IOThrowsError m r [LispVal m r]
 box a = return [a]
 
 -- |Convert a list of Lisp objects into a space-separated string
-unwordsList :: [LispVal r] -> String
+unwordsList :: [LispVal m r] -> String
 unwordsList = unwords . map showVal
 
 -- |Allow conversion of lispval instances to strings
-instance Show (LispVal r) where show = showVal
+instance Show (LispVal m r) where show = showVal
 
 
 -- Functions required by the interpreter --
@@ -533,21 +543,21 @@ instance Show (LispVal r) where show = showVal
 -- |Create a scheme function
 makeFunc :: -- forall (m :: * -> *).
             (Monad m) =>
-            Maybe String -> Env r -> [LispVal r] -> [LispVal r] -> m (LispVal r)
+            Maybe String -> Env m r -> [LispVal m r] -> [LispVal m r] -> m (LispVal m r)
 makeFunc varargs env fparams fbody = return $ Func (map showVal fparams) varargs fbody env
 
 -- |Create a normal scheme function
-makeNormalFunc :: (Monad m) => Env r
-               -> [LispVal r]
-               -> [LispVal r]
-               -> m (LispVal r)
+makeNormalFunc :: (Monad m) => Env m r
+               -> [LispVal m r]
+               -> [LispVal m r]
+               -> m (LispVal m r)
 makeNormalFunc = makeFunc Nothing
 
 -- |Create a scheme function that can receive any number of arguments
-makeVarargs :: (Monad m) => LispVal r -> Env r
-                        -> [LispVal r]
-                        -> [LispVal r]
-                        -> m (LispVal r)
+makeVarargs :: (Monad m) => LispVal m r -> Env m r
+                        -> [LispVal m r]
+                        -> [LispVal m r]
+                        -> m (LispVal m r)
 makeVarargs = makeFunc . Just . showVal
 
 -- Functions required by a compiled program --
@@ -556,30 +566,30 @@ makeVarargs = makeFunc . Just . showVal
 makeHFunc ::
             (Monad m) =>
             Maybe String 
-         -> Env r 
+         -> Env m r 
          -> [String] 
-         -> (Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r)) 
+         -> (Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)) 
 --         -> String 
-         -> m (LispVal r)
+         -> m (LispVal m r)
 makeHFunc varargs env fparams fbody = return $ HFunc fparams varargs fbody env --(map showVal fparams) varargs fbody env
 -- |Create a normal haskell function
 makeNormalHFunc :: (Monad m) =>
-                  Env r
+                  Env m r
                -> [String]
-               -> (Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r))
-               -> m (LispVal r)
+               -> (Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r))
+               -> m (LispVal m r)
 makeNormalHFunc = makeHFunc Nothing
 
 -- |Create a haskell function that can receive any number of arguments
-makeHVarargs :: (Monad m) => LispVal r 
-                        -> Env r
+makeHVarargs :: (Monad m) => LispVal m r 
+                        -> Env m r
                         -> [String]
-                        -> (Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r))
-                        -> m (LispVal r)
+                        -> (Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r))
+                        -> m (LispVal m r)
 makeHVarargs = makeHFunc . Just . showVal
 
 -- |Validate formal function parameters.
-validateFuncParams :: [LispVal r] -> Maybe Integer -> IOThrowsError r Bool
+validateFuncParams :: Monad m => [LispVal m r] -> Maybe Integer -> IOThrowsError m r Bool
 --validateFuncParams [Atom _] _ = return True
 validateFuncParams ps (Just n) = do
   if length ps /= fromInteger n

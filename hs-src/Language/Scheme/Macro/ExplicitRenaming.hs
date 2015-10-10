@@ -1,4 +1,6 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE RankNTypes #-}
+
 {- |
 Module      : Language.Scheme.Macro.ExplicitRenaming
 Copyright   : Justin Ethier
@@ -27,20 +29,20 @@ module Language.Scheme.Macro.ExplicitRenaming
     ) where
 import Language.Scheme.Types
 import Language.Scheme.Variables
-import Language.Scheme.Primitives (_gensym)
+import Language.Scheme.Primitives (MonadSerial, _gensym)
 import Control.Monad.Except
 -- import Debug.Trace
 
 -- |Handle an explicit renaming macro
 explicitRenamingTransform ::
-       (ReadRef r IO, WriteRef r IO, NewRef r IO, PtrEq r)
-    => Env r -- ^Environment where macro was used
-    -> Env r -- ^Temporary environment to store renamed variables
-    -> Env r -- ^Environment containing any variables renamed by syntax-rules
-    -> LispVal r -- ^Form to transform
-    -> LispVal r -- ^Macro transformer
-    -> (LispVal r -> LispVal r -> [LispVal r] -> IOThrowsError r (LispVal r)) -- ^Eval func
-    -> IOThrowsError r (LispVal r)
+       (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r)
+    => Env m r -- ^Environment where macro was used
+    -> Env m r -- ^Temporary environment to store renamed variables
+    -> Env m r -- ^Environment containing any variables renamed by syntax-rules
+    -> LispVal m r -- ^Form to transform
+    -> LispVal m r -- ^Macro transformer
+    -> (LispVal m r -> LispVal m r -> [LispVal m r] -> IOThrowsError m r (LispVal m r)) -- ^Eval func
+    -> IOThrowsError m r (LispVal m r)
 explicitRenamingTransform useEnv renameEnv srRenameEnv lisp 
                           transformer@(Func _ _ _ defEnv) apply = do
   let continuation = makeNullContinuation useEnv
@@ -74,14 +76,14 @@ explicitRenamingTransform _ _ _ _ _ _ =
 -- the sense of eqv?. It is an error if the renaming
 -- procedure is called after the transformation
 -- procedure has returned.
-exRename :: (ReadRef r IO, WriteRef r IO, NewRef r IO) => Env r -> Env r -> Env r -> Env r -> [LispVal r] -> IOThrowsError r (LispVal r)
+exRename :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m) => Env m r -> Env m r -> Env m r -> Env m r -> [LispVal m r] -> IOThrowsError m r (LispVal m r)
 exRename useEnv _ srRenameEnv defEnv [Atom a] = do
-  isSynRulesRenamed <- liftIO $ isRecBound srRenameEnv a
+  isSynRulesRenamed <- lift $ isRecBound srRenameEnv a
 
   if isSynRulesRenamed -- already renamed by syntax-rules, so just return it
    then getVar srRenameEnv a
    else do
-    isDef <- liftIO $ isRecBound defEnv a
+    isDef <- lift $ isRecBound defEnv a
     if isDef
      then do
 
@@ -110,11 +112,12 @@ exRename useEnv _ srRenameEnv defEnv [Atom a] = do
 exRename _ _ _ _ form = throwError $ Default $ "Unable to rename: " ++ show form
 
 -- |The explicit renaming /compare/ function
-exCompare :: Env r        -- ^ Environment of use
-          -> Env r        -- ^ Environment with renames
-          -> Env r        -- ^ Environment of definition
-          -> [LispVal r]  -- ^ Values to compare
-          -> IOThrowsError r (LispVal r)
+exCompare :: Monad m
+          => Env m r        -- ^ Environment of use
+          -> Env m r        -- ^ Environment with renames
+          -> Env m r        -- ^ Environment of definition
+          -> [LispVal m r]  -- ^ Values to compare
+          -> IOThrowsError m r (LispVal m r)
 exCompare _ _ _ [a, b] = do
   return $ Bool $ eqVal a b
 exCompare _ _ _ form = throwError $ 

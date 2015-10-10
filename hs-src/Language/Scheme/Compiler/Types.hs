@@ -71,11 +71,11 @@ defaultCompileOptions :: String -> CompOpts
 defaultCompileOptions thisFunc = CompileOptions thisFunc False False Nothing
 
 -- |Options passed to the compiler library module
-data CompLibOpts r = CompileLibraryOptions {
-    compBlock :: String -> Maybe String -> Env r 
-              -> [HaskAST] -> [LispVal r] -> IOThrowsError r [HaskAST],
-    compLisp :: Env r -> String -> String -> Maybe String 
-              -> IOThrowsError r [HaskAST]
+data CompLibOpts m r = CompileLibraryOptions {
+    compBlock :: String -> Maybe String -> Env m r 
+              -> [HaskAST] -> [LispVal m r] -> IOThrowsError m r [HaskAST],
+    compLisp :: Env m r -> String -> String -> Maybe String 
+              -> IOThrowsError m r [HaskAST]
     }
 
 -- |Runtime reference to module data structure
@@ -123,7 +123,7 @@ data HaskAST = AstAssignM String HaskAST
 showValAST :: HaskAST -> String
 showValAST (AstAssignM var val) = "  " ++ var ++ " <- " ++ show val
 showValAST (AstFunction name args code) = do
-  let typeSig = "\n" ++ name ++ " :: Env r -> LispVal r -> LispVal r -> Maybe [LispVal r] -> IOThrowsError r (LispVal r) "
+  let typeSig = "\n" ++ name ++ " :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError r (LispVal m r) "
   let fheader = "\n" ++ name ++ args ++ " = do "
   let fbody = unwords . map (\x -> '\n' : x ) $ map showValAST code
 #ifdef UseDebug
@@ -158,7 +158,7 @@ joinL
 joinL ls sep = Data.List.intercalate sep ls
 
 -- |Convert abstract syntax tree to a string
-ast2Str :: LispVal r -> String 
+ast2Str :: LispVal m r -> String 
 ast2Str (String s) = "String " ++ show s
 ast2Str (Char c) = "Char " ++ show c
 ast2Str (Atom a) = "Atom " ++ show a
@@ -185,7 +185,7 @@ ast2Str (DottedList ls l) =
 ast2Str l = show l -- Error?
 
 -- |Convert a list of abstract syntax trees to a list of strings
-asts2Str :: [LispVal r] -> String
+asts2Str :: [LispVal m r] -> String
 asts2Str ls = do
     "[" ++ (joinL (map ast2Str ls) ",") ++ "]"
 

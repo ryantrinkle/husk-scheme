@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE RankNTypes #-}
 {- |
 Module      : Language.Scheme.Environments
 Copyright   : Justin Ethier
@@ -25,7 +26,7 @@ import qualified Data.Char
 import System.IO
 
 -- |Primitive functions that execute within the IO monad
-ioPrimitives :: (ReadRef r IO, PtrEq r) => [(String, [LispVal r] -> IOThrowsError r (LispVal r))]
+ioPrimitives :: (MonadIO m, MonadSerial m, ReadRef r m, PtrEq m r) => [(String, [LispVal m r] -> ExceptT (LispError m r) m (LispVal m r))]
 ioPrimitives = [("open-input-file", makePort openFile ReadMode ),
                 ("open-binary-input-file", makePort openBinaryFile ReadMode),
                 ("open-output-file", makePort openFile WriteMode),
@@ -158,21 +159,21 @@ ioPrimitives = [("open-input-file", makePort openFile ReadMode ),
                 ("gensym", gensym)]
 
 
-printEnv' :: ReadRef r IO => [LispVal r] -> IOThrowsError r (LispVal r)
+printEnv' :: (MonadIO m, ReadRef r m) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 printEnv' [LispEnv env] = do
-    result <- liftIO $ printEnv env
+    result <- lift $ printEnv env
     return $ String result
 printEnv' [] = throwError $ NumArgs (Just 1) []
 printEnv' args = throwError $ TypeMismatch "env" $ List args
 
-exportsFromEnv' :: ReadRef r IO => [LispVal r] -> IOThrowsError r (LispVal r)
+exportsFromEnv' :: ReadRef r m => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 exportsFromEnv' [LispEnv env] = do
-    result <- liftIO $ exportsFromEnv env
+    result <- lift $ exportsFromEnv env
     return $ List result
 exportsFromEnv' _ = return $ List []
 
 -- | Pure primitive functions
-primitives :: [(String, [LispVal r] -> ThrowsError r (LispVal r))]
+primitives :: [(String, [LispVal m r] -> ThrowsError m r (LispVal m r))]
 primitives = [("+", numAdd),
               ("-", numSub),
               ("*", numMul),
@@ -258,7 +259,7 @@ primitives = [("+", numAdd),
               ("eof-object?", isEOFObject),
               ("eof-object", eofObject),
               ("symbol?", isSymbol),
-              ("symbol=?", isSymbolEq),
+              ("symbol=?", return . isSymbolEq),
               ("symbol->string", symbol2String),
               ("char?", isChar),
 
@@ -274,12 +275,12 @@ primitives = [("+", numAdd),
               ("make-string", makeString),
 
               ("boolean?", isBoolean),
-              ("boolean=?", isBooleanEq),
+              ("boolean=?", return . isBooleanEq),
 
               ("husk-interpreter?", isInterpreter)]
 
 -- |Custom function used internally in the test suite
-isInterpreter :: [LispVal r] -> ThrowsError r (LispVal r)
+isInterpreter :: [LispVal m r] -> ThrowsError m r (LispVal m r)
 isInterpreter [] = return $ Bool True
 isInterpreter _ = return $ Bool False
 

@@ -16,7 +16,7 @@ import qualified Language.Scheme.Core as LSC -- Scheme Interpreter
 import Language.Scheme.Types                 -- Scheme data types
 import qualified Language.Scheme.Util as LSU (countAllLetters, countLetters, strip)
 import qualified Language.Scheme.Variables as LSV -- Scheme variable operations
-import Control.Monad.Error
+import Control.Monad.Except
 import qualified Data.Char as DC
 import qualified Data.List as DL
 import Data.Maybe (fromMaybe)
@@ -97,12 +97,12 @@ showHelp _ = do
 flushStr :: String -> IO ()
 flushStr str = putStr str >> hFlush stdout
 
-getRuntimeEnv :: String -> IO (Env IORef)
+getRuntimeEnv :: String -> IO (Env IO IORef)
 getRuntimeEnv "7" = LSC.r7rsEnv
 getRuntimeEnv _ = LSC.r5rsEnv
 
 -- |Execute a single scheme file from the command line
-runOne :: IO (Env IORef) -> [String] -> Bool -> IO ()
+runOne :: IO (Env IO IORef) -> [String] -> Bool -> IO ()
 runOne initEnv args interactive = do
   env <- initEnv >>= flip LSV.extendEnv
                           [((LSV.varNamespace, "args"),
@@ -126,13 +126,13 @@ runOne initEnv args interactive = do
     runRepl env)
 
 -- |Start the REPL (interactive interpreter)
-runRepl :: Env IORef -> IO ()
+runRepl :: Env IO IORef -> IO ()
 runRepl env' = do
     let settings = HL.Settings (completeScheme env') Nothing True
     HL.runInputT settings (loop env')
     where
         -- Main REPL loop
-        loop :: Env IORef -> HL.InputT IO ()
+        loop :: Env IO IORef -> HL.InputT IO ()
         loop env = do
             minput <- HL.getInputLine "huski> "
             case minput of
@@ -168,7 +168,7 @@ runRepl env' = do
           cOpen > cClose
 
 -- |Auto-complete using scheme symbols
-completeScheme :: Env IORef -> (String, String) 
+completeScheme :: Env IO IORef -> (String, String) 
                -> IO (String, [HLC.Completion])
 -- Right after a ')' it seems more useful to autocomplete next closed parenthesis
 completeScheme _ (lnL@(')':_), _) = do
