@@ -138,11 +138,11 @@ data Namespace
 -- |A Scheme environment containing variable bindings of form @(namespaceName, variableName), variableValue@
 data Env m r = Environment {
         parentEnv :: Maybe (Env m r),
-        bindings :: r (Map (Namespace, String) (r (LispVal m r))),
-        pointers :: r (Map (Namespace, String) (r [LispVal m r]))
+        bindings :: r (Map Namespace (Map String (r (LispVal m r)))),
+        pointers :: r (Map Namespace (Map String (r [LispVal m r])))
     }
 
-type PtrEq m r = (Eq (r (Map (Namespace, String) (r (LispVal m r)))), Eq (r (Map (Namespace, String) (r [LispVal m r]))))
+type PtrEq m r = (Eq (r (Map Namespace (Map String (r (LispVal m r))))), Eq (r (Map Namespace (Map String (r [LispVal m r])))))
 
 instance PtrEq m r => Eq (Env m r) where
     (Environment _ xb xpts) == (Environment _ yb ypts) = 
