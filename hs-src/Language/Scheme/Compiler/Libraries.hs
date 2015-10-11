@@ -27,7 +27,7 @@ import Control.Monad.Except
 
 -- |Import all given modules and generate code for them
 importAll 
-    :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r)
+    :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r)
     => Env m r 
     -- ^ Compilation environment
     -> Env m r 
@@ -56,7 +56,7 @@ importAll env metaEnv (m : ms) lopts
     return $ c ++ rest ++ stub
 importAll _ _ [] _ _ = return []
 
-_importAll :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r)
+_importAll :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r)
            => Env m r
            -> Env m r
            -> LispVal m r
@@ -75,7 +75,7 @@ _importAll env metaEnv m lopts copts = do
         err -> throwError $ TypeMismatch "module/import" err
 
 -- |Import a single module
-importModule :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r)
+importModule :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r)
              => Env m r
              -> Env m r
              -> LispVal m r
@@ -144,7 +144,7 @@ importModule env metaEnv moduleName imports lopts
 
 -- | Load module into memory and generate compiled code
 loadModule
-    :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r)
+    :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r)
     => Env m r 
     -- ^ Compilation meta environment, containing code from modules.scm
     -> LispVal m r
@@ -209,7 +209,7 @@ loadModule metaEnv name lopts copts@(CompileOptions {}) = do
 
 -- |Compile the given module, using metadata loaded into memory.
 --  This code is based off of eval-module from the meta language.
-compileModule :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r)
+compileModule :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r)
               => Env m r
               -> Env m r
               -> LispVal m r
@@ -264,7 +264,7 @@ createFunctionStub thisFunc nextFunc = do
 
 -- |Compile sub-modules. That is, modules that are imported by
 --  another module in the (define-library) definition
-cmpSubMod :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r)
+cmpSubMod :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r)
           => Env m r
           -> Env m r
           -> LispVal m r
@@ -294,7 +294,7 @@ cmpSubMod _ _ _ _ (CompileOptions thisFunc _ _ lastFunc) =
     return [createFunctionStub thisFunc lastFunc]
 
 -- |Compile module directives (expressions) in a module definition
-cmpModExpr :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r)
+cmpModExpr :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r)
            => Env m r
            -> Env m r
            -> LispVal m r

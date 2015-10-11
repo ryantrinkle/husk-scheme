@@ -1,6 +1,6 @@
 { mkDerivation, array, base, bytestring, containers, directory
 , filepath, ghc-paths, haskeline, knob, mtl, parsec, process
-, stdenv, time, transformers, utf8-string
+, stdenv, time, transformers, utf8-string, file-embed
 }:
 mkDerivation {
   pname = "husk-scheme";
@@ -11,6 +11,7 @@ mkDerivation {
   buildDepends = [
     array base bytestring containers directory filepath ghc-paths
     haskeline knob mtl parsec process time transformers utf8-string
+    file-embed
   ];
   homepage = "http://justinethier.github.com/husk-scheme";
   description = "R5RS Scheme interpreter, compiler, and library";

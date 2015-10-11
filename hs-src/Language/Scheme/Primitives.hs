@@ -160,7 +160,10 @@ module Language.Scheme.Primitives (
 -- , systemRead
 
  , MonadSerial (..)
+ , MonadFilesystem (..)
+ , MonadStdin (..)
  ) where
+import Prelude hiding (readFile, getContents)
 import Language.Scheme.Numerical
 import Language.Scheme.Parser
 import Language.Scheme.Types
@@ -177,10 +180,11 @@ import qualified Data.Knob as DK
 import qualified Data.Map
 import qualified Data.Time.Clock.POSIX
 import Data.Word
-import System.Directory (doesFileExist, removeFile)
+import qualified System.Directory as IO (doesFileExist, removeFile)
 import qualified System.Environment as SE
 import System.Exit (ExitCode(..))
-import System.IO
+import System.IO hiding (readFile, getContents)
+import qualified System.IO as IO
 import System.IO.Error
 import qualified System.Process
 --import System.Process (readProcess)
@@ -667,10 +671,10 @@ writeBuffer other _ =
 --
 --   Returns: Bool - True if file exists, false otherwise
 --
-fileExists :: (MonadIO m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
+fileExists :: (MonadFilesystem m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 fileExists [p@(Pointer _ _)] = recDerefPtrs p >>= box >>= fileExists
 fileExists [String filename] = do
-    exists <- liftIO $ doesFileExist filename
+    exists <- doesFileExist filename
     return $ Bool exists
 fileExists [] = throwError $ NumArgs (Just 1) []
 fileExists args@(_ : _) = throwError $ NumArgs (Just 1) args
@@ -683,13 +687,9 @@ fileExists args@(_ : _) = throwError $ NumArgs (Just 1) args
 --
 --   Returns: Bool - True if file was deleted, false if an error occurred
 --
-deleteFile :: (MonadIO m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
+deleteFile :: (MonadFilesystem m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 deleteFile [p@(Pointer _ _)] = recDerefPtrs p >>= box >>= deleteFile
-deleteFile [String filename] = do
-    output <- liftIO $ try' (liftIO $ removeFile filename)
-    case output of
-        Left _ -> return $ Bool False
-        Right _ -> return $ Bool True
+deleteFile [String filename] = liftM Bool $ removeFile filename
 deleteFile [] = throwError $ NumArgs (Just 1) []
 deleteFile args@(_ : _) = throwError $ NumArgs (Just 1) args
 
@@ -701,11 +701,39 @@ deleteFile args@(_ : _) = throwError $ NumArgs (Just 1) args
 --
 --   Returns: String - Actual text read from the file
 --
-readContents :: (MonadIO m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
-readContents [String filename] = liftM String $ liftIO $ readFile filename
+readContents :: (MonadFilesystem m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
+readContents [String filename] = liftM String $ readFile filename
 readContents [p@(Pointer _ _)] = recDerefPtrs p >>= box >>= readContents
 readContents [] = throwError $ NumArgs (Just 1) []
 readContents args@(_ : _) = throwError $ NumArgs (Just 1) args
+
+class Monad m => MonadFilesystem m where
+  doesFileExist :: FilePath -> m Bool
+  readFile :: FilePath -> m String
+  removeFile :: FilePath -> m Bool
+
+instance MonadFilesystem IO where
+  doesFileExist = IO.doesFileExist
+  readFile = IO.readFile
+  removeFile filename = do
+    output <- try' $ removeFile filename
+    case output of
+        Left _ -> return False
+        Right _ -> return True
+
+instance MonadFilesystem m => MonadFilesystem (ExceptT e m) where
+  doesFileExist = lift . doesFileExist
+  readFile = lift . readFile
+  removeFile = lift . removeFile
+
+class Monad m => MonadStdin m where
+  getContents :: m String
+
+instance MonadStdin IO where
+  getContents = IO.getContents
+
+instance MonadStdin m => MonadStdin (ExceptT e m) where
+  getContents = lift getContents
 
 -- |Parse the given file and return a list of scheme expressions
 --
@@ -715,12 +743,12 @@ readContents args@(_ : _) = throwError $ NumArgs (Just 1) args
 --
 --   Returns: [LispVal m r] - Raw contents of the file parsed as scheme code
 --
-load :: MonadIO m => String -> IOThrowsError m r [LispVal m r]
+load :: MonadFilesystem m => String -> IOThrowsError m r [LispVal m r]
 load filename = do
-  result <- liftIO $ doesFileExist filename
+  result <- doesFileExist filename
   if result
      then do
-        f <- liftIO $ readFile filename
+        f <- readFile filename
 
         case lines f of
             -- Skip comment header for shell scripts
@@ -738,11 +766,11 @@ load filename = do
 --
 --   Returns: List - Raw contents of the file parsed as scheme code
 --
-readAll :: (MonadIO m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
+readAll :: (MonadFilesystem m, MonadStdin m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 readAll [p@(Pointer _ _)] = recDerefPtrs p >>= box >>= readAll
 readAll [String filename] = liftM List $ load filename
 readAll [] = do -- read from stdin
-    input <- liftIO $ getContents
+    input <- getContents
     lisp <- (liftThrows . readExprList) input
     return $ List lisp
 readAll args@(_ : _) = throwError $ NumArgs (Just 1) args

@@ -13,7 +13,7 @@ A front-end for the husk compiler
 
 module Main where
 import Paths_husk_scheme
-import Language.Scheme.Primitives (MonadSerial)
+import Language.Scheme.Primitives (MonadFilesystem, MonadStdin, MonadSerial)
 import Language.Scheme.Compiler
 import Language.Scheme.Compiler.Types
 import qualified Language.Scheme.Core
@@ -155,7 +155,7 @@ process inFile outHaskell outExec libs dynamic extraArgs langrev debugOpt = do
    _ -> compileHaskellFile outHaskell outExec dynamic extraArgs
 
 -- |Compile a scheme file to haskell
-compileSchemeFile :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> Maybe String -> String -> String -> String -> String -> Bool -> IOThrowsError m r (LispVal m r)
+compileSchemeFile :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> Maybe String -> String -> String -> String -> String -> Bool -> IOThrowsError m r (LispVal m r)
 compileSchemeFile env stdlib srfi55 filename outHaskell langrev _ = do
   let conv :: LispVal m r -> String
       conv (String s) = s

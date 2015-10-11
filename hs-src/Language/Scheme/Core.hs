@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 {- |
 Module      : Language.Scheme.Core
@@ -32,13 +33,13 @@ module Language.Scheme.Core
     , purePrimitiveBindings
     , r5rsEnv
     , r5rsEnv'
+    , addR5rsEnv'
     , r7rsEnv
     , r7rsEnv'
     , r7rsTimeEnv
     , version
     -- * Utility functions
     , findFileOrLib
-    , getDataFileFullPath
     , replaceAtIndex
     , registerExtensions
     , showBanner
@@ -52,6 +53,7 @@ module Language.Scheme.Core
     , throwErrorWithCallHistory
     -- * Internal use only
     , meval
+    , libFiles
     ) where
 import qualified Paths_husk_scheme as PHS (getDataFileName, version)
 #ifdef UseFfi
@@ -74,6 +76,10 @@ import Data.Version as DV
 import Data.Word
 import qualified System.Exit
 import qualified System.Info as SysInfo
+import Data.FileEmbed
+import Data.Map (Map)
+import qualified Data.Map as Map
+import Control.Arrow (first)
 -- import Debug.Trace
 
 -- |Husk version number
@@ -108,9 +114,8 @@ getHuskFeatures = do
            , Atom "ratios"
            ]
 
--- |Get the full path to a data file installed for husk
-getDataFileFullPath :: MonadIO m => String -> m String
-getDataFileFullPath = liftIO . PHS.getDataFileName
+libFiles :: Map FilePath BS.ByteString
+libFiles = Map.fromList $ map (first ("/data/lib/" ++)) $(embedDir "lib")
 
 -- Future use:
 -- getDataFileFullPath' :: [LispVal m r] -> IOThrowsError LispVal m r
@@ -124,21 +129,21 @@ getDataFileFullPath = liftIO . PHS.getDataFileName
 --  libraries. If the file is not found in the current directory but exists
 --  as a husk library, return the full path to the file in the library.
 --  Otherwise just return the given filename.
-findFileOrLib :: (MonadIO m, ReadRef r m, PtrEq m r) => String -> IOThrowsError m r String
+findFileOrLib :: (MonadFilesystem m, ReadRef r m, PtrEq m r) => String -> IOThrowsError m r String
 findFileOrLib filename = do
-    fileAsLib <- liftIO $ getDataFileFullPath $ "lib/" ++ filename
+    let fileAsLib = "/data/lib/" ++ filename
     exists <- fileExists [String filename]
     existsLib <- fileExists [String fileAsLib]
     case (exists, existsLib) of
         (Bool False, Bool True) -> return fileAsLib
         _ -> return filename
 
-libraryExists :: (MonadIO m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
+libraryExists :: (MonadFilesystem m, ReadRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 libraryExists [p@(Pointer _ _)] = do
     p' <- recDerefPtrs p
     libraryExists [p']
 libraryExists [(String filename)] = do
-    fileAsLib <- liftIO $ getDataFileFullPath $ "lib/" ++ filename
+    let fileAsLib = "/data/lib/" ++ filename
     Bool exists <- fileExists [String filename]
     Bool existsLib <- fileExists [String fileAsLib]
     return $ Bool $ exists || existsLib
@@ -1062,18 +1067,22 @@ apply _ func args = do
 --
 --  For the purposes of using husk as an extension language, /r5rsEnv/ will
 --  probably be more useful.
-primitiveBindings :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => m (Env m r)
+primitiveBindings :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => m (Env m r)
 primitiveBindings = nullEnv >>= 
-    flip extendEnv  ( map (domakeFunc IOFunc) ioPrimitives
-                   ++ map (domakeFunc EvalFunc) evalFunctions
-                   ++ map (domakeFunc PrimitiveFunc) primitives)
+    flip extendEnv (concat [ map (domakeFunc IOFunc) ioPrimitives
+                           , map (domakeFunc IOFunc) virtualIoPrimitives
+                           , map (domakeFunc EvalFunc) evalFunctions
+                           , map (domakeFunc PrimitiveFunc) primitives
+                           ])
   where domakeFunc constructor (var, func) = 
             ((Var, var), constructor func)
 
-purePrimitiveBindings :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => m (Env m r)
+purePrimitiveBindings :: (MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => m (Env m r)
 purePrimitiveBindings = nullEnv >>= 
-    flip extendEnv  ( map (domakeFunc EvalFunc) pureEvalFunctions
-                   ++ map (domakeFunc PrimitiveFunc) primitives)
+    flip extendEnv (concat [ map (domakeFunc IOFunc) virtualIoPrimitives
+                           , map (domakeFunc EvalFunc) pureEvalFunctions
+                           , map (domakeFunc PrimitiveFunc) primitives
+                           ])
   where domakeFunc constructor (var, func) = 
             ((Var, var), constructor func)
 
@@ -1092,7 +1101,7 @@ nullEnvWithImport = nullEnv >>=
     ((Var, "hash-table-ref"), IOFunc $ wrapHashTbl hashTblRef)])
 
 -- |Load the standard r5rs environment, including libraries
-r5rsEnv :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => m (Env m r)
+r5rsEnv :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => m (Env m r)
 r5rsEnv = do
   env <- r5rsEnv'
   -- Bit of a hack to load (import)
@@ -1102,11 +1111,13 @@ r5rsEnv = do
 
 -- |Load the standard r5rs environment, including libraries,
 --  but do not create the (import) binding
-r5rsEnv' :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => m (Env m r)
-r5rsEnv' = do
-  env <- primitiveBindings
-  stdlib <- liftIO $ PHS.getDataFileName "lib/stdlib.scm"
-  srfi55 <- liftIO $ PHS.getDataFileName "lib/srfi/srfi-55.scm" -- (require-extension)
+r5rsEnv' :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => m (Env m r)
+r5rsEnv' = addR5rsEnv' =<< primitiveBindings
+
+addR5rsEnv' :: (MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> m (Env m r)
+addR5rsEnv' env = do
+  let stdlib = "/data/lib/stdlib.scm"
+      srfi55 = "/data/lib/srfi/srfi-55.scm" -- (require-extension)
   
   -- Load standard library
   features <- getHuskFeatures
@@ -1115,11 +1126,11 @@ r5rsEnv' = do
 
   -- Load (require-extension), which can be used to load other SRFI's
   _ <- evalString env $ "(load \"" ++ (escapeBackslashes srfi55) ++ "\")"
-  registerExtensions env $ liftIO . PHS.getDataFileName
+  registerExtensions env $ return . ("/data/lib/" ++)
 
 #ifdef UseLibraries
   -- Load module meta-language 
-  metalib <- liftIO $ PHS.getDataFileName "lib/modules.scm"
+  let metalib = "/data/lib/modules.scm"
   metaEnv <- nullEnvWithParent env -- Load env as parent of metaenv
   _ <- evalString metaEnv $ "(load \"" ++ (escapeBackslashes metalib) ++ "\")"
   -- Load meta-env so we can find it later
@@ -1128,8 +1139,8 @@ r5rsEnv' = do
   _ <- evalLisp' metaEnv $ List [Atom "add-module!", List [Atom "quote", List [Atom "scheme"]], List [Atom "make-module", Bool False, LispEnv env {-baseEnv-}, List [Atom "quote", List []]]]
 --  _ <- evalString metaEnv
 --         "(add-module! '(scheme r5rs) (make-module #f (interaction-environment) '()))"
-  timeEnv <- r7rsTimeEnv
-  _ <- evalLisp' metaEnv $ List [Atom "add-module!", List [Atom "quote", List [Atom "scheme", Atom "time", Atom "posix"]], List [Atom "make-module", Bool False, LispEnv timeEnv, List [Atom "quote", List []]]]
+  -- timeEnv <- r7rsTimeEnv --TODO
+  _ <- evalLisp' metaEnv $ List [Atom "add-module!", List [Atom "quote", List [Atom "scheme", Atom "time", Atom "posix"]], List [Atom "make-module", Bool False, {- LispEnv timeEnv, -} List [Atom "quote", List []]]]
 
   _ <- evalLisp' metaEnv $ List [
     Atom "define", 
@@ -1144,7 +1155,7 @@ r5rsEnv' = do
 --
 --  Note that the only difference between this and the r5rs equivalent is that
 --  slightly less Scheme code is loaded initially.
-r7rsEnv :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => m (Env m r)
+r7rsEnv :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => m (Env m r)
 r7rsEnv = do
   env <- r7rsEnv'
   -- Bit of a hack to load (import)
@@ -1153,7 +1164,7 @@ r7rsEnv = do
   return env
 -- |Load the standard r7rs environment
 --
-r7rsEnv' :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => m (Env m r)
+r7rsEnv' :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => m (Env m r)
 r7rsEnv' = do
   -- TODO: longer term, will need r7rs bindings instead of these
   -- basically want to limit the base bindings to the absolute minimum, but
@@ -1212,12 +1223,12 @@ evalfuncExitFail :: forall m r. (MonadIO m, ReadRef r m, WriteRef r m, NewRef r 
 evalfuncApply :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 evalfuncDynamicWind :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 evalfuncEval :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
-evalfuncLoad :: forall m r. (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
+evalfuncLoad :: forall m r. (MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 evalfuncCallCC :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 evalfuncCallWValues :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 evalfuncMakeEnv :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
-evalfuncNullEnv :: forall m r. (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
-evalfuncPureNullEnv :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
+evalfuncNullEnv :: forall m r. (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
+evalfuncPureNullEnv :: forall m r. (MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 evalfuncUseParentEnv :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 evalfuncExit :: forall m r. (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 evalfuncInteractionEnv :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
@@ -1444,11 +1455,12 @@ evalfuncExitSuccess _ = do
   _ <- liftIO System.Exit.exitSuccess
   return $ Nil ""
 
-pureEvalFunctions :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [(String, [LispVal m r] -> ExceptT (LispError m r) m (LispVal m r))]
+pureEvalFunctions :: (MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [(String, [LispVal m r] -> ExceptT (LispError m r) m (LispVal m r))]
 pureEvalFunctions = [ ("apply", evalfuncApply)
                       , ("call-with-current-continuation", evalfuncCallCC)
                       , ("call-with-values", evalfuncCallWValues)
                       , ("dynamic-wind", evalfuncDynamicWind)
+                      , ("load", evalfuncLoad)
                       , ("eval", evalfuncEval)
                       , ("pure-null-environment", evalfuncPureNullEnv)
                       , ("current-environment", evalfuncInteractionEnv)
@@ -1468,9 +1480,8 @@ pureEvalFunctions = [ ("apply", evalfuncApply)
                     ]
 
 {- Primitive functions that extend the core evaluator -}
-evalFunctions :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [(String, [LispVal m r] -> ExceptT (LispError m r) m (LispVal m r))]
+evalFunctions :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [(String, [LispVal m r] -> ExceptT (LispError m r) m (LispVal m r))]
 evalFunctions = pureEvalFunctions ++ [ ("exit", evalfuncExit)
-                                     , ("load", evalfuncLoad)
                                      , ("null-environment", evalfuncNullEnv)
                                      , ("exit-fail", evalfuncExitFail)
                                      , ("exit-success", evalfuncExitSuccess)

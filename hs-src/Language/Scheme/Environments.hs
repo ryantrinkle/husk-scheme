@@ -14,6 +14,7 @@ Portability : portable
 module Language.Scheme.Environments
     (
       primitives
+    , virtualIoPrimitives
     , ioPrimitives
     ) where
 import Language.Scheme.Libraries
@@ -140,24 +141,17 @@ ioPrimitives = [("open-input-file", makePort openFile ReadMode ),
               ("hash-table-values", wrapHashTbl hashTblValues),
               ("hash-table-copy",   wrapHashTbl hashTblCopy),
 
-                -- From SRFI 96
-                ("file-exists?", fileExists),
-                ("delete-file", deleteFile),
-
                 -- husk internal functions
                 --("husk-path", getDataFileFullPath'),
 
                 -- Other I/O functions
                 ("print-env", printEnv'),
                 ("env-exports", exportsFromEnv'),
-                ("read-contents", readContents),
-                ("read-all", readAll),
                 ("find-module-file", findModuleFile),
                 ("system", system),
-                ("get-environment-variables", getEnvVars),
+                ("get-environment-variables", getEnvVars)
 --                ("system-read", systemRead),
-                ("gensym", gensym)]
-
+               ]
 
 printEnv' :: (MonadIO m, ReadRef r m) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 printEnv' [LispEnv env] = do
@@ -171,6 +165,17 @@ exportsFromEnv' [LispEnv env] = do
     result <- lift $ exportsFromEnv env
     return $ List result
 exportsFromEnv' _ = return $ List []
+
+virtualIoPrimitives :: (MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, PtrEq m r) => [(String, [LispVal m r] -> ExceptT (LispError m r) m (LispVal m r))]
+virtualIoPrimitives = [("gensym", gensym),
+
+                       -- From SRFI 96
+                       ("file-exists?", fileExists),
+                       ("delete-file", deleteFile),
+
+                       ("read-contents", readContents),
+                       ("read-all", readAll)
+                      ]
 
 -- | Pure primitive functions
 primitives :: [(String, [LispVal m r] -> ThrowsError m r (LispVal m r))]

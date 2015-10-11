@@ -74,7 +74,7 @@ initializeCompiler env = do
 
 -- | Compile a file containing scheme code
 compileLisp 
-    :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r)
+    :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r)
     => Env m r  -- ^ Compiler environment 
     -> String -- ^ Filename
     -> String -- ^ Function entry point (code calls into this function)
@@ -90,13 +90,13 @@ compileLisp env filename entryPoint exitPoint = do
         _ -> return ast
 
 -- |Compile a list (block) of Scheme code
-compileBlock :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => String -> Maybe String -> Env m r -> [HaskAST] -> [LispVal m r] 
+compileBlock :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => String -> Maybe String -> Env m r -> [HaskAST] -> [LispVal m r] 
              -> IOThrowsError m r [HaskAST]
 compileBlock symThisFunc symLastFunc env result lisps = do
   _ <- defineTopLevelVars env lisps
   _compileBlock symThisFunc symLastFunc env result lisps
 
-_compileBlock :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => String -> Maybe String -> Env m r -> [HaskAST] -> [LispVal m r]
+_compileBlock :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => String -> Maybe String -> Env m r -> [HaskAST] -> [LispVal m r]
               -> IOThrowsError m r [HaskAST]
 _compileBlock symThisFunc symLastFunc env result [c] = do
   let copts = CompileOptions symThisFunc False False symLastFunc 
@@ -213,7 +213,7 @@ defineTopLevelVar env var = do
 -- |Compile a Lisp expression to Haskell. Note this function does
 --  not expand macros; mcompile should be used instead if macros
 --  may appear in the expression.
-compile :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> LispVal m r -> CompOpts -> IOThrowsError m r [HaskAST]
+compile :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> LispVal m r -> CompOpts -> IOThrowsError m r [HaskAST]
 -- Experimenting with r7rs library support
 compile env 
         (List (Atom "import" : mods)) 
@@ -1015,7 +1015,7 @@ compile env args@(List (_ : _)) copts = mfunc env args compileApply copts
 compile _ badForm _ = throwError $ BadSpecialForm "Unrecognized special form" badForm
 
 -- |Expand macros and compile the resulting code
-mcompile :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> LispVal m r -> CompOpts -> IOThrowsError m r [HaskAST]
+mcompile :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> LispVal m r -> CompOpts -> IOThrowsError m r [HaskAST]
 mcompile env lisp = mfunc env lisp compile
 
 -- |Expand macros and then pass control to the given function 
@@ -1090,7 +1090,7 @@ compileSpecialForm _ formCode copts = do
 
 -- |A wrapper for each special form that allows the form variable 
 --  (EG: "if") to be redefined at compile time
-compileSpecialFormBody :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r)
+compileSpecialFormBody :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r)
                        => Env m r
                        -> LispVal m r
                        -> CompOpts
@@ -1108,12 +1108,12 @@ compileSpecialFormBody _ _ _ _ = throwError $ InternalError "compileSpecialFormB
 
 -- | Compile an intermediate expression (such as an arg to if) and 
 --   call into the next continuation with it's value
-compileExpr :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> LispVal m r -> String -> Maybe String -> IOThrowsError m r [HaskAST]
+compileExpr :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> LispVal m r -> String -> Maybe String -> IOThrowsError m r [HaskAST]
 compileExpr env expr symThisFunc fForNextExpr = do
   mcompile env expr (CompileOptions symThisFunc False False fForNextExpr) 
 
 -- |Compile a function call
-compileApply :: forall m r. (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> LispVal m r -> CompOpts -> IOThrowsError m r [HaskAST]
+compileApply :: forall m r. (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> LispVal m r -> CompOpts -> IOThrowsError m r [HaskAST]
 compileApply env (List (func : fparams)) copts@(CompileOptions coptsThis _ _ coptsNext) = do
 
 --
