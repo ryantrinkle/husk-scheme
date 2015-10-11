@@ -36,6 +36,7 @@ module Language.Scheme.Core
     , addR5rsEnv'
     , r7rsEnv
     , r7rsEnv'
+    , addR7rsEnv'
     , r7rsTimeEnv
     , version
     -- * Utility functions
@@ -1171,14 +1172,18 @@ r7rsEnv' = do
   -- need enough to get the meta language working
   env <- primitiveBindings --baseBindings
 --  baseEnv <- primitiveBindings
+  addR7rsEnv' env
+  
+addR7rsEnv' :: (MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> m (Env m r)
+addR7rsEnv' env = do
 
   -- Load necessary libraries
   -- Unfortunately this adds them in the top-level environment (!!)
   features <- getHuskFeatures
   _ <- evalString env $ "(define *features* '" ++ show (List features) ++ ")"
-  cxr <- liftIO $ PHS.getDataFileName "lib/cxr.scm"
+  let cxr = "/data/lib/cxr.scm"
   _ <- evalString env {-baseEnv-} $ "(load \"" ++ (escapeBackslashes cxr) ++ "\")" 
-  core <- liftIO $ PHS.getDataFileName "lib/core.scm"
+  let core = "/data/lib/core.scm"
   _ <- evalString env {-baseEnv-} $ "(load \"" ++ (escapeBackslashes core) ++ "\")" 
 
 -- TODO: probably will have to load some scheme libraries for modules.scm to work
@@ -1186,7 +1191,7 @@ r7rsEnv' = do
 
 #ifdef UseLibraries
   -- Load module meta-language 
-  metalib <- liftIO $ PHS.getDataFileName "lib/modules.scm"
+  let metalib = "/data/lib/modules.scm"
   metaEnv <- nullEnvWithParent env -- Load env as parent of metaenv
   _ <- evalString metaEnv $ "(load \"" ++ (escapeBackslashes metalib) ++ "\")"
   -- Load meta-env so we can find it later
@@ -1194,8 +1199,8 @@ r7rsEnv' = do
   -- Load base primitives
   _ <- evalLisp' metaEnv $ List [Atom "add-module!", List [Atom "quote", List [Atom "scheme"]], List [Atom "make-module", Bool False, LispEnv env {-baseEnv-}, List [Atom "quote", List []]]]
 
-  timeEnv <- r7rsTimeEnv
-  _ <- evalLisp' metaEnv $ List [Atom "add-module!", List [Atom "quote", List [Atom "scheme", Atom "time", Atom "posix"]], List [Atom "make-module", Bool False, LispEnv timeEnv, List [Atom "quote", List []]]]
+  -- timeEnv <- r7rsTimeEnv --TODO
+  _ <- evalLisp' metaEnv $ List [Atom "add-module!", List [Atom "quote", List [Atom "scheme", Atom "time", Atom "posix"]], List [Atom "make-module", Bool False, {- LispEnv timeEnv, -} List [Atom "quote", List []]]]
 
   _ <- evalLisp' metaEnv $ List [
     Atom "define", 
