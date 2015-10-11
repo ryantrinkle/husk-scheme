@@ -92,18 +92,18 @@ exRename useEnv _ srRenameEnv defEnv [Atom a] = do
        --       renaming the same variable differently within the
        --       same context. This caused the module meta language
        --       to not work properly...
-       r <- getNamespacedVar' useEnv 'r' a
+       r <- getNamespacedVar' useEnv Renamed a
        case r of
          Just renamed -> return renamed
          Nothing -> do
             value <- getVar defEnv a
             Atom renamed <- _gensym a -- Unique name
             _ <- defineVar useEnv renamed value -- divert value to Use Env
-            _ <- defineNamespacedVar useEnv 'r' a $ Atom renamed -- Record renamed sym
+            _ <- defineNamespacedVar useEnv Renamed a $ Atom renamed -- Record renamed sym
 
             -- Keep track of diverted values for use by the compiler
-            List diverted <- getNamespacedVar useEnv ' ' "diverted"
-            _ <- setNamespacedVar useEnv ' ' "diverted" $ 
+            List diverted <- getNamespacedVar useEnv Diverted "diverted"
+            _ <- setNamespacedVar useEnv Diverted "diverted" $ 
                 List (diverted ++ [List [Atom renamed, Atom a]])
 
             return $ Atom renamed

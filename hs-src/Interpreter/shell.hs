@@ -105,7 +105,7 @@ getRuntimeEnv _ = LSC.r5rsEnv
 runOne :: IO (Env IO IORef) -> [String] -> Bool -> IO ()
 runOne initEnv args interactive = do
   env <- initEnv >>= flip LSV.extendEnv
-                          [((LSV.varNamespace, "args"),
+                          [((Var, "args"),
                            List $ map String $ drop 1 args)]
 
   result <- (LSC.runIOThrows $ liftM show $ 

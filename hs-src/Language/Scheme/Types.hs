@@ -104,6 +104,7 @@ module Language.Scheme.Types
     , WriteRef (..)
     , NewRef (..)
     , PtrEq
+    , Namespace (..)
     )
  where
 import Control.Monad.Except
@@ -114,23 +115,34 @@ import Data.Dynamic
 import qualified Data.Knob as DK
 import qualified Data.List as DL
 import Data.IORef
-import qualified Data.Map
+import qualified Data.Map as Map
+import Data.Map (Map)
 -- import Data.Maybe
 import Data.Ratio
 import System.IO
 import Text.ParserCombinators.Parsec hiding (spaces)
-import Data.Map (Map)
 
 -- Environment management
 
+data Namespace
+   = Var
+   | Macro
+   | Renamed
+   | Diverted
+   | Unmatched -- ^ "unmatched nary pattern variable"
+   | ImproperPattern
+   | ImproperInput
+   | Internal
+   deriving (Show, Read, Eq, Ord, Enum, Bounded)
+
 -- |A Scheme environment containing variable bindings of form @(namespaceName, variableName), variableValue@
 data Env m r = Environment {
-        parentEnv :: (Maybe (Env m r)),
-        bindings :: (r (Data.Map.Map String (r (LispVal m r)))),
-        pointers :: (r (Data.Map.Map String (r [LispVal m r])))
+        parentEnv :: Maybe (Env m r),
+        bindings :: r (Map (Namespace, String) (r (LispVal m r))),
+        pointers :: r (Map (Namespace, String) (r [LispVal m r]))
     }
 
-type PtrEq m r = (Eq (r (Map String (r (LispVal m r)))), Eq (r (Map String (r [LispVal m r]))))
+type PtrEq m r = (Eq (r (Map (Namespace, String) (r (LispVal m r)))), Eq (r (Map (Namespace, String) (r [LispVal m r]))))
 
 instance PtrEq m r => Eq (Env m r) where
     (Environment _ xb xpts) == (Environment _ yb ypts) = 
@@ -166,8 +178,8 @@ instance WriteRef r m => WriteRef r (ExceptT e m) where
 -- |An empty environment
 nullEnv :: NewRef r m => m (Env m r)
 nullEnv = do 
-    nullBindings <- newRef $ Data.Map.fromList []
-    nullPointers <- newRef $ Data.Map.fromList []
+    nullBindings <- newRef $ Map.fromList []
+    nullPointers <- newRef $ Map.fromList []
     return $ Environment Nothing nullBindings nullPointers
 
 -- |Types of errors that may occur when evaluating Scheme code
@@ -240,7 +252,7 @@ data LispVal m r = Atom String
  -- ^Vector
  | ByteVector BS.ByteString
  -- ^ByteVector from R7RS
- | HashTable (Data.Map.Map (LispVal m r) (LispVal m r))
+ | HashTable (Map (LispVal m r) (LispVal m r))
  {- ^Hash table.
  Technically this could be a derived data type instead of being built-in to the
  interpreter. And perhaps in the future it will be. But for now, a hash table
@@ -433,8 +445,8 @@ eqv [(DottedList xs x), (DottedList ys y)] = eqv [List $ xs ++ [x], List $ ys ++
 eqv [(Vector arg1), (Vector arg2)] = eqv [List (elems arg1), List (elems arg2)]
 eqv [(ByteVector a), (ByteVector b)] = return $ Bool $ a == b
 eqv [(HashTable arg1), (HashTable arg2)] =
-  eqv [List (map (\ (x, y) -> List [x, y]) $ Data.Map.toAscList arg1),
-       List (map (\ (x, y) -> List [x, y]) $ Data.Map.toAscList arg2)]
+  eqv [List (map (\ (x, y) -> List [x, y]) $ Map.toAscList arg1),
+       List (map (\ (x, y) -> List [x, y]) $ Map.toAscList arg2)]
 --
 -- This comparison function may be too simplistic. Basically we check to see if
 -- functions have the same calling interface. If they do, then we compare the 

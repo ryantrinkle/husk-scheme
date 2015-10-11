@@ -64,9 +64,9 @@ divertBinding
     -> String -- ^ Name to use for the binding in @to@
     -> IOThrowsError m r (LispVal m r)
 divertBinding to from nameOrig nameNew = do
-  isMacroBound <- lift $ isNamespacedRecBound from macroNamespace nameOrig
-  namespace <- lift $ if isMacroBound then return macroNamespace
-                                      else return varNamespace
+  isMacroBound <- lift $ isNamespacedRecBound from Macro nameOrig
+  namespace <- lift $ if isMacroBound then return Macro
+                                      else return Var
   m <- getNamespacedVar from namespace nameOrig
   defineNamespacedVar to namespace nameNew m
 

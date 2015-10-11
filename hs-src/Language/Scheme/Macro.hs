@@ -107,11 +107,11 @@ import Data.Array
 --  mean to be used by the husk compiler.
 getDivertedVars :: ReadRef r m => Env m r -> IOThrowsError m r [LispVal m r]
 getDivertedVars env = do
-  List tmp <- getNamespacedVar env ' ' "diverted"
+  List tmp <- getNamespacedVar env Diverted "diverted"
   return tmp
 
 clearDivertedVars :: (ReadRef r m, WriteRef r m, NewRef r m) => Env m r -> IOThrowsError m r (LispVal m r)
-clearDivertedVars env = defineNamespacedVar env ' ' "diverted" $ List []
+clearDivertedVars env = defineNamespacedVar env Diverted "diverted" $ List []
 
 -- |Examines the input AST to see if it is a macro call. 
 --  If a macro call is found, the code is expanded.
@@ -146,8 +146,8 @@ _macroEval :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) 
            -> IOThrowsError m r (LispVal m r)
 _macroEval env lisp@(List (Atom x : _)) apply = do
   -- Note: If there is a procedure of the same name it will be shadowed by the macro.
-  var <- getNamespacedVar' env macroNamespace x
-  -- DEBUG: var <- (trace ("expand: " ++ x) getNamespacedVar') env macroNamespace x
+  var <- getNamespacedVar' env Macro x
+  -- DEBUG: var <- (trace ("expand: " ++ x) getNamespacedVar') env Macro x
   case var of
     -- Explicit Renaming
     Just (SyntaxExplicitRenaming transformer@(Func {})) -> do
@@ -421,7 +421,7 @@ flagUnmatchedVar :: (ReadRef r m, WriteRef r m, NewRef r m) => Env m r -> String
 flagUnmatchedVar localEnv var improperListFlag = do
   _ <- defineVar localEnv var $ Nil "" -- Empty nil will signify the empty match
   defineNamespacedVar localEnv 
-                      '_' -- "unmatched nary pattern variable" 
+                      Unmatched
                       var $ Bool $ improperListFlag
 
 {- 
@@ -542,8 +542,8 @@ checkLocal defEnv outerEnv _ localEnv renameEnv identifiers ellipsisLevel ellips
       initializePatternVar _ ellipIndex pat val = do
         let flags = getListFlags ellipIndex listFlags 
         _ <- defineVar localEnv pat (Matches.setData (List []) ellipIndex val)
-        _ <- defineNamespacedVar localEnv 'p' {-"improper pattern"-} pat $ Bool $ fst flags
-        defineNamespacedVar localEnv 'i' {-"improper input"-} pat $ Bool $ snd flags
+        _ <- defineNamespacedVar localEnv ImproperPattern pat $ Bool $ fst flags
+        defineNamespacedVar localEnv ImproperInput pat $ Bool $ snd flags
 
 checkLocal defEnv outerEnv divertEnv localEnv renameEnv identifiers ellipsisLevel ellipsisIndex (Vector p) (Vector i) flags esym =
   -- For vectors, just use list match for now, since vector input matching just requires a
@@ -767,7 +767,7 @@ walkExpandedAtom _ useEnv _ renameEnv _ _ True _ (List _)
     False _ _ = do
         -- Do we need to rename the keyword, or at least take that into account?
         renameEnvClosure <- lift $ copyEnv renameEnv
-        _ <- defineNamespacedVar useEnv macroNamespace keyword $ Syntax (Just useEnv) (Just renameEnvClosure) True ellipsis identifiers rules
+        _ <- defineNamespacedVar useEnv Macro keyword $ Syntax (Just useEnv) (Just renameEnvClosure) True ellipsis identifiers rules
         return $ Nil "" -- Sentinal value
 walkExpandedAtom _ useEnv _ renameEnv _ _ True _ (List _)
     "define-syntax" 
@@ -775,7 +775,7 @@ walkExpandedAtom _ useEnv _ renameEnv _ _ True _ (List _)
     False _ _ = do
         -- Do we need to rename the keyword, or at least take that into account?
         renameEnvClosure <- lift $ copyEnv renameEnv
-        _ <- defineNamespacedVar useEnv macroNamespace keyword $ Syntax (Just useEnv) (Just renameEnvClosure) True "..." identifiers rules
+        _ <- defineNamespacedVar useEnv Macro keyword $ Syntax (Just useEnv) (Just renameEnvClosure) True "..." identifiers rules
         return $ Nil "" -- Sentinal value
 walkExpandedAtom _ useEnv _ _ _ _ True _ (List _)
     "define-syntax" 
@@ -784,7 +784,7 @@ walkExpandedAtom _ useEnv _ _ _ _ True _ (List _)
              (List (Atom "lambda" : List fparams : fbody))])])
     False _ _ = do
         f <- lift $ makeNormalFunc useEnv fparams fbody 
-        _ <- defineNamespacedVar useEnv macroNamespace keyword $ SyntaxExplicitRenaming f
+        _ <- defineNamespacedVar useEnv Macro keyword $ SyntaxExplicitRenaming f
         return $ Nil "" -- Sentinal value
 walkExpandedAtom _ _ _ _ _ _ True _ _ "define-syntax" ts False _ _ = do
   throwError $ BadSpecialForm "Malformed define-syntax expression" $ List (Atom "define-syntax" : ts)
@@ -1191,8 +1191,8 @@ transformRule defEnv outerEnv divertEnv localEnv renameEnv cleanupEnv dim identi
     ellipsisHere isDefined = do
         if isDefined
              then do 
-                    isImproperPattern <- loadNamespacedBool 'p' -- "improper pattern"
-                    isImproperInput <- loadNamespacedBool 'i' -- "improper input"
+                    isImproperPattern <- loadNamespacedBool ImproperPattern
+                    isImproperInput <- loadNamespacedBool ImproperInput
                     -- Load variable and ensure it is a list
                     var <- getVar localEnv a
                     case var of
@@ -1209,8 +1209,8 @@ transformRule defEnv outerEnv divertEnv localEnv renameEnv cleanupEnv dim identi
                   transformRule defEnv outerEnv divertEnv localEnv renameEnv cleanupEnv dim identifiers esym ellipsisLevel ellipsisIndex (List result) (List $ tail ts)
 
     noEllipsis isDefined = do
-      isImproperPattern <- loadNamespacedBool 'p' -- "improper pattern"
-      isImproperInput <- loadNamespacedBool 'i' -- "improper input"
+      isImproperPattern <- loadNamespacedBool ImproperPattern
+      isImproperInput <- loadNamespacedBool ImproperInput
       t <- if isDefined
               then do
                    var <- getVar localEnv a
@@ -1222,7 +1222,7 @@ transformRule defEnv outerEnv divertEnv localEnv renameEnv cleanupEnv dim identi
                         -- the pattern. We pick it up and in turn pass a special flag to the outer code (as t)
                         -- so that it can finally be processed correctly.
                         wasPair <- getNamespacedVar localEnv 
-                                                    '_' --  "unmatched nary pattern variable" 
+                                                    Unmatched
                                                     a
                         case wasPair of
                             Bool True -> return $ Nil "var (pair) not defined in pattern"
@@ -1243,13 +1243,13 @@ transformRule defEnv outerEnv divertEnv localEnv renameEnv cleanupEnv dim identi
                   -- we need to keep track of the var in two environments to map both ways 
                   -- between the original name and the new name.
 
-                  alreadyRenamed <- getNamespacedVar' localEnv 'r' {-"renamed"-} a
+                  alreadyRenamed <- getNamespacedVar' localEnv Renamed a
                   case alreadyRenamed of
                     Just renamed -> return renamed
                     Nothing -> do
                        Atom renamed <- _gensym a
-                       _ <- defineNamespacedVar localEnv  'r' {-"renamed"-} a $ Atom renamed
-                       _ <- defineNamespacedVar renameEnv 'r' {-"renamed"-} a $ Atom renamed
+                       _ <- defineNamespacedVar localEnv  Renamed a $ Atom renamed
+                       _ <- defineNamespacedVar renameEnv Renamed a $ Atom renamed
                        -- Keep track of vars that are renamed; maintain reverse mapping
                        _ <- defineVar cleanupEnv renamed $ Atom a -- Global record for final cleanup of macro
                        _ <- defineVar renameEnv renamed $ Atom a -- Keep for Clinger
@@ -1331,8 +1331,8 @@ transformLiteralIdentifier defEnv outerEnv divertEnv renameEnv definedInMacro tr
          _ <- defineVar divertEnv renamed value 
 
          -- Keep track of diverted values for use by the compiler
-         List diverted <- getNamespacedVar outerEnv ' ' "diverted"
-         _ <- setNamespacedVar outerEnv ' ' "diverted" $ 
+         List diverted <- getNamespacedVar outerEnv Diverted "diverted"
+         _ <- setNamespacedVar outerEnv Diverted "diverted" $ 
              List (diverted ++ [List [Atom renamed, Atom transform]])
 
          return $ Atom renamed
@@ -1476,7 +1476,7 @@ loadMacros e be Nothing dim
                 Atom ellipsis :
                 (List identifiers : rules)))] : 
         bs) = do
-  _ <- defineNamespacedVar be macroNamespace keyword $ 
+  _ <- defineNamespacedVar be Macro keyword $ 
         Syntax (Just e) Nothing dim ellipsis identifiers rules
   loadMacros e be Nothing dim bs
 
@@ -1487,7 +1487,7 @@ loadMacros e be Nothing dim
          (List (Atom "syntax-rules" : 
                 (List identifiers : rules)))] : 
         bs) = do
-  _ <- defineNamespacedVar be macroNamespace keyword $ 
+  _ <- defineNamespacedVar be Macro keyword $ 
         Syntax (Just e) Nothing dim "..." identifiers rules
   loadMacros e be Nothing dim bs
 
@@ -1498,7 +1498,7 @@ loadMacros e be Nothing dim
              (List (Atom "lambda" : List fparams : fbody))])]
        : bs) = do
   f <- lift $ makeNormalFunc e fparams fbody 
-  _ <- defineNamespacedVar be macroNamespace keyword $ SyntaxExplicitRenaming f
+  _ <- defineNamespacedVar be Macro keyword $ SyntaxExplicitRenaming f
   loadMacros e be Nothing dim bs
 
 -- This pattern is reached when there is a rename env, which
@@ -1517,7 +1517,7 @@ loadMacros e be (Just re) dim
     (Atom "syntax-rules", 
      (Atom ellipsis :
       (List identifiers : rules))) -> do
-        _ <- defineNamespacedVar be macroNamespace exKeyword $ 
+        _ <- defineNamespacedVar be Macro exKeyword $ 
              Syntax (Just e) (Just re) dim ellipsis identifiers rules
         loadMacros e be (Just re) dim bs
     (Atom "syntax-rules", 
@@ -1526,7 +1526,7 @@ loadMacros e be (Just re) dim
 --        List exRules <- cleanExpanded e e e re re dim False False (List []) (List rules)
 
         -- TODO: error checking
-        _ <- defineNamespacedVar be macroNamespace exKeyword $ 
+        _ <- defineNamespacedVar be Macro exKeyword $ 
 --             Syntax (Just e) (Just re) dim identifiers (trace ("exRules = " ++ show exRules) exRules) --rules
 --             Syntax (Just e) (Just re) dim identifiers exRules --rules
              Syntax (Just e) (Just re) dim "..." identifiers rules
@@ -1540,7 +1540,7 @@ loadMacros e be (Just re) dim
         -- TODO: this is not good enough, er macros will
         --       need access to the rename env
         f <- lift $ makeNormalFunc e fparams fbody 
-        _ <- defineNamespacedVar be macroNamespace exKeyword $ SyntaxExplicitRenaming f
+        _ <- defineNamespacedVar be Macro exKeyword $ SyntaxExplicitRenaming f
         loadMacros e be (Just re) dim bs
     _ -> throwError $ BadSpecialForm "Unable to evaluate form w/re" $ List args
 
@@ -1567,13 +1567,13 @@ isLexicallyDefined outerEnv renameEnv a = do
 
 findBoundMacro :: ReadRef r m => [Env m r] -> Env m r -> String -> IOThrowsError m r (Maybe (LispVal m r))
 findBoundMacro defEnv useEnv a = do
-  synUse <- getNamespacedVar' useEnv macroNamespace a
+  synUse <- getNamespacedVar' useEnv Macro a
   case synUse of
     Just syn -> return $ Just syn
     _ -> check defEnv
  where
   check (e : es) = do
-    r <- getNamespacedVar' e macroNamespace a
+    r <- getNamespacedVar' e Macro a
     case r of
       Just _ -> return r
       _ -> check es

@@ -69,7 +69,7 @@ initializeCompiler env = do
   -- Define imports var here as an empty list.
   -- This list is appended to by (load-ffi) instances,
   -- and the imports are explicitly added later on...
-  _ <- defineNamespacedVar env 't' {-"internal"-} "imports" $ List []
+  _ <- defineNamespacedVar env Internal "imports" $ List []
   return []
 
 -- | Compile a file containing scheme code
@@ -296,16 +296,16 @@ compile env
                    Atom newKeyword,
                    Atom keyword]) 
         copts = do
-  bound <- getNamespacedVar' env macroNamespace keyword
+  bound <- getNamespacedVar' env Macro keyword
   case bound of
     Just m -> do
-        _ <- defineNamespacedVar env macroNamespace newKeyword m
+        _ <- defineNamespacedVar env Macro newKeyword m
         compFunc <- return $ [
-          AstValue $ "  bound <- getNamespacedVar' env macroNamespace \"" ++ 
+          AstValue $ "  bound <- getNamespacedVar' env Macro \"" ++ 
                           keyword ++ "\"",
           AstValue $ "  case bound of ",
           AstValue $ "    Just m -> ",
-          AstValue $ "      defineNamespacedVar env macroNamespace \"" ++ 
+          AstValue $ "      defineNamespacedVar env Macro \"" ++ 
                               newKeyword ++ "\" m",
           AstValue $ "    Nothing -> throwError $ TypeMismatch \"macro\" $ " ++ 
                              "Atom \"" ++ keyword ++ "\"",
@@ -323,11 +323,11 @@ compile env ast@(List [Atom "define-syntax", Atom keyword,
         fbodyStr = asts2Str fbody
   
     f <- lift $ makeNormalFunc env fparams fbody 
-    _ <- defineNamespacedVar env macroNamespace keyword $ SyntaxExplicitRenaming f
+    _ <- defineNamespacedVar env Macro keyword $ SyntaxExplicitRenaming f
   
     compFunc <- return $ [
       AstValue $ "  f <- makeNormalFunc env " ++ fparamsStr ++ " " ++ fbodyStr, 
-      AstValue $ "  defineNamespacedVar env macroNamespace \"" ++ keyword ++ 
+      AstValue $ "  defineNamespacedVar env Macro \"" ++ keyword ++ 
                       "\" $ SyntaxExplicitRenaming f",
       createAstCont copts "(Nil \"\")" ""]
     return $ [createAstFunc copts compFunc])
@@ -339,13 +339,13 @@ compile env lisp@(List [Atom "define-syntax", Atom keyword,
         ruleStr = asts2Str rules
   
     -- Make macro available at compile time
-    _ <- defineNamespacedVar env macroNamespace keyword $ 
+    _ <- defineNamespacedVar env Macro keyword $ 
            Syntax (Just env) Nothing False ellipsis identifiers rules
   
     -- And load it at runtime as well
     -- Env should be identical to the one loaded at compile time...
     compileScalar 
-      ("  defineNamespacedVar env macroNamespace \"" ++ keyword ++ 
+      ("  defineNamespacedVar env Macro \"" ++ keyword ++ 
        "\" $ Syntax (Just env) Nothing False \"" ++ ellipsis ++ "\" " ++ idStr ++ " " ++ ruleStr) copts)
 
 compile env lisp@(List [Atom "define-syntax", Atom keyword, 
@@ -355,13 +355,13 @@ compile env lisp@(List [Atom "define-syntax", Atom keyword,
         ruleStr = asts2Str rules
   
     -- Make macro available at compile time
-    _ <- defineNamespacedVar env macroNamespace keyword $ 
+    _ <- defineNamespacedVar env Macro keyword $ 
            Syntax (Just env) Nothing False "..." identifiers rules
   
     -- And load it at runtime as well
     -- Env should be identical to the one loaded at compile time...
     compileScalar 
-      ("  defineNamespacedVar env macroNamespace \"" ++ keyword ++ 
+      ("  defineNamespacedVar env Macro \"" ++ keyword ++ 
        "\" $ Syntax (Just env) Nothing False \"...\" " ++ idStr ++ " " ++ ruleStr) copts)
 
 compile env ast@(List [Atom "if", predic, conseq]) copts = 
@@ -998,9 +998,9 @@ compile env (List [Atom "load-ffi",
 --  Atom symLoadFFI <- _gensym "loadFFI"
 
   -- Only append module again if it is not already in the list
-  List l <- getNamespacedVar env 't' {-"internal"-} "imports"
+  List l <- getNamespacedVar env Internal "imports"
   _ <- if String moduleName `notElem` l
-          then setNamespacedVar env 't' {-"internal"-} "imports" $ 
+          then setNamespacedVar env Internal "imports" $ 
                                 List $ l ++ [String moduleName]
           else return $ String ""
 

@@ -441,10 +441,10 @@ eval env cont args@(List (Atom "letrec-syntax" : List _bindings : _body)) = do
 eval env cont (List [Atom "define-syntax", 
                      Atom newKeyword,
                      Atom keyword]) = do
-  bound <- getNamespacedVar' env macroNamespace keyword
+  bound <- getNamespacedVar' env Macro keyword
   case bound of
     Just m -> do
-        _ <- defineNamespacedVar env macroNamespace newKeyword m
+        _ <- defineNamespacedVar env Macro newKeyword m
         continueEval env cont (Nil "") Nothing
     Nothing -> throwError $ TypeMismatch "macro" $ Atom keyword
 
@@ -460,7 +460,7 @@ eval env cont args@(List [Atom "define-syntax", Atom keyword,
     --       for now can ignore complications of an ER found during syn-rules transformation
     _ <- validateFuncParams fparams (Just 3)
     f <- lift $ makeNormalFunc env fparams fbody 
-    _ <- defineNamespacedVar env macroNamespace keyword $ SyntaxExplicitRenaming f
+    _ <- defineNamespacedVar env Macro keyword $ SyntaxExplicitRenaming f
     continueEval env cont (Nil "") Nothing 
 
 eval env cont args@(List [Atom "define-syntax", Atom keyword, 
@@ -469,7 +469,7 @@ eval env cont args@(List [Atom "define-syntax", Atom keyword,
  if bound
   then prepareApply env cont args -- if bound to a variable in this scope; call into it
   else do 
-    _ <- defineNamespacedVar env macroNamespace keyword $ 
+    _ <- defineNamespacedVar env Macro keyword $ 
             Syntax (Just env) Nothing False ellipsis identifiers rules
     continueEval env cont (Nil "") Nothing
 
@@ -496,7 +496,7 @@ eval env cont args@(List [Atom "define-syntax", Atom keyword,
     -- Anyway, this may come back. But not using it for now...
     --
     --    defEnv <- lift $ copyEnv env
-    _ <- defineNamespacedVar env macroNamespace keyword $ Syntax (Just env) Nothing False "..." identifiers rules
+    _ <- defineNamespacedVar env Macro keyword $ Syntax (Just env) Nothing False "..." identifiers rules
     continueEval env cont (Nil "") Nothing 
 
 eval env cont args@(List [Atom "if", predic, conseq, alt]) = do
@@ -997,7 +997,7 @@ apply cont (Func aparams avarargs abody aclosure) args =
   if (num aparams /= num args && isNothing avarargs) ||
      (num aparams > num args && isJust avarargs)
      then throwError $ NumArgs (Just (num aparams)) args
-     else lift (extendEnv aclosure $ zip (map ((,) varNamespace) aparams) args) >>= bindVarArgs avarargs >>= (evalBody abody)
+     else lift (extendEnv aclosure $ zip (map ((,) Var) aparams) args) >>= bindVarArgs avarargs >>= (evalBody abody)
   where remainingArgs = drop (length aparams) args
         num = toInteger . length
         --
@@ -1025,13 +1025,13 @@ apply cont (Func aparams avarargs abody aclosure) args =
             continueEval cwcEnv (Continuation cwcEnv (Just (SchemeBody cwcBody)) (Just cwcCont) cwcDynWind cStack) (Nil "") Nothing
 
         bindVarArgs arg env = case arg of
-          Just argName -> lift $ extendEnv env [((varNamespace, argName), List remainingArgs)]
+          Just argName -> lift $ extendEnv env [((Var, argName), List remainingArgs)]
           Nothing -> return env
 apply cont (HFunc aparams avarargs abody aclosure) args =
   if (num aparams /= num args && isNothing avarargs) ||
      (num aparams > num args && isJust avarargs)
      then throwError $ NumArgs (Just (num aparams)) args
-     else lift (extendEnv aclosure $ zip (map ((,) varNamespace) aparams) args) >>= bindVarArgs avarargs >>= (evalBody abody)
+     else lift (extendEnv aclosure $ zip (map ((,) Var) aparams) args) >>= bindVarArgs avarargs >>= (evalBody abody)
   where remainingArgs = drop (length aparams) args
         num = toInteger . length
         evalBody evBody env = evBody env cont (Nil "") (Just [])
@@ -1048,7 +1048,7 @@ apply cont (HFunc aparams avarargs abody aclosure) args =
             continueEval cwcEnv (Continuation cwcEnv (Just (SchemeBody cwcBody)) (Just cwcCont) Nothing cwcDynWind) $ Nil ""-}
 
         bindVarArgs arg env = case arg of
-          Just argName -> lift $ extendEnv env [((varNamespace, argName), List $ remainingArgs)]
+          Just argName -> lift $ extendEnv env [((Var, argName), List $ remainingArgs)]
           Nothing -> return env
 apply _ func args = do
   List [func'] <- recDerefPtrs $ List [func] -- Deref any pointers
@@ -1068,28 +1068,28 @@ primitiveBindings = nullEnv >>=
                    ++ map (domakeFunc EvalFunc) evalFunctions
                    ++ map (domakeFunc PrimitiveFunc) primitives)
   where domakeFunc constructor (var, func) = 
-            ((varNamespace, var), constructor func)
+            ((Var, var), constructor func)
 
 purePrimitiveBindings :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => m (Env m r)
 purePrimitiveBindings = nullEnv >>= 
     flip extendEnv  ( map (domakeFunc EvalFunc) pureEvalFunctions
                    ++ map (domakeFunc PrimitiveFunc) primitives)
   where domakeFunc constructor (var, func) = 
-            ((varNamespace, var), constructor func)
+            ((Var, var), constructor func)
 
 --baseBindings :: m (Env m r)
 --baseBindings = nullEnv >>= 
 --    (flip extendEnv $ map (domakeFunc EvalFunc) evalFunctions)
 --  where domakeFunc constructor (var, func) = 
---            ((varNamespace, var), constructor func)
+--            ((Var, var), constructor func)
 
 -- |An empty environment with the %import function. This is presently
 --  just intended for internal use by the compiler.
 nullEnvWithImport :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => m (Env m r)
 nullEnvWithImport = nullEnv >>= 
   (flip extendEnv [
-    ((varNamespace, "%import"), EvalFunc evalfuncImport),
-    ((varNamespace, "hash-table-ref"), IOFunc $ wrapHashTbl hashTblRef)])
+    ((Var, "%import"), EvalFunc evalfuncImport),
+    ((Var, "hash-table-ref"), IOFunc $ wrapHashTbl hashTblRef)])
 
 -- |Load the standard r5rs environment, including libraries
 r5rsEnv :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => m (Env m r)
@@ -1200,7 +1200,7 @@ r7rsTimeEnv :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m,
 r7rsTimeEnv = do
     nullEnv >>= 
      (flip extendEnv 
-           [ ((varNamespace, "current-second"), IOFunc currentTimestamp)])
+           [ ((Var, "current-second"), IOFunc currentTimestamp)])
 
 -- Functions that extend the core evaluator, but that can be defined separately.
 --
@@ -1382,8 +1382,8 @@ evalfuncImport _ = throwError $ InternalError ""
 bootstrapImport :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 bootstrapImport [cont@(Continuation {contClosure = env})] = do
     LispEnv me <- getVar env "*meta-env*"
-    ri <- getNamespacedVar me macroNamespace "repl-import"
-    renv <- defineNamespacedVar env macroNamespace "import" ri
+    ri <- getNamespacedVar me Macro "repl-import"
+    renv <- defineNamespacedVar env Macro "import" ri
     continueEval env cont renv Nothing
 bootstrapImport _ = throwError $ InternalError ""
 

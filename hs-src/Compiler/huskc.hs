@@ -183,7 +183,7 @@ compileSchemeFile env stdlib srfi55 filename outHaskell langrev _ = do
   execC <- compileLisp env filename nextFunc Nothing
 
   -- Append any additional import modules
-  List imports <- getNamespacedVar env 't' {-"internal"-} "imports"
+  List imports <- getNamespacedVar env Internal "imports"
   let moreHeaderImports = map conv imports
 
   outH <- liftIO $ openFile outHaskell WriteMode
