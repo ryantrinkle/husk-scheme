@@ -1,4 +1,5 @@
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 {- |
 Module      : Language.Scheme.Compiler.Types
@@ -43,12 +44,15 @@ import qualified Data.Complex as DC
 import qualified Data.List
 import qualified Data.Map
 import qualified Data.Ratio as DR
+import Data.Text (Text)
+import qualified Data.Text as T
+import Data.Monoid
 
 -- |A type to store options passed to compile.
 --  Eventually all of this might be able to be 
 --  integrated into a Compile monad.
 data CompOpts = CompileOptions {
-    coptsThisFunc :: String,        
+    coptsThisFunc :: Text,        
     -- ^Immediate name to use when creating a compiled function.
     --  Presumably there is other code that is expecting
     --  to call into it.
@@ -59,7 +63,7 @@ data CompOpts = CompileOptions {
     coptsThisFuncUseArgs :: Bool,
     -- ^Whether to include the /args/ parameter in the current function
     
-    coptsNextFunc :: Maybe String
+    coptsNextFunc :: Maybe Text
     -- ^The name to use for the next function after the current
     --  compiler recursion is finished. For example, after compiling
     --  a block of code, the control flow would be expected to go
@@ -67,19 +71,19 @@ data CompOpts = CompileOptions {
     }
 
 -- |The default compiler options
-defaultCompileOptions :: String -> CompOpts
+defaultCompileOptions :: Text -> CompOpts
 defaultCompileOptions thisFunc = CompileOptions thisFunc False False Nothing
 
 -- |Options passed to the compiler library module
 data CompLibOpts m r = CompileLibraryOptions {
-    compBlock :: String -> Maybe String -> Env m r 
+    compBlock :: Text -> Maybe Text -> Env m r 
               -> [HaskAST] -> [LispVal m r] -> IOThrowsError m r [HaskAST],
-    compLisp :: Env m r -> String -> String -> Maybe String 
+    compLisp :: Env m r -> Text -> Text -> Maybe Text 
               -> IOThrowsError m r [HaskAST]
     }
 
 -- |Runtime reference to module data structure
-moduleRuntimeVar :: String
+moduleRuntimeVar :: Text
 moduleRuntimeVar = " modules "
 
 -- |Create code for a function
@@ -90,123 +94,120 @@ createAstFunc
 createAstFunc (CompileOptions thisFunc useVal useArgs _) funcBody = do
   let val = if useVal then "value" else "_"
       args = if useArgs then "(Just args)" else "_"
-  AstFunction thisFunc (" env cont " ++ val ++ " " ++ args ++ " ") funcBody
+  AstFunction thisFunc (" env cont " <> val <> " " <> args <> " ") funcBody
 
 -- |Create code for a continutation
 createAstCont 
   :: CompOpts -- ^ Compilation options
-  -> String -- ^ Value to send to the continuation
-  -> String -- ^ Extra leading indentation (or blank string if none)
+  -> Text -- ^ Value to send to the continuation
+  -> Text -- ^ Extra leading indentation (or blank string if none)
   -> HaskAST -- ^ Generated code
 createAstCont (CompileOptions _ _ _ (Just nextFunc)) var indentation = do
-  AstValue $ indentation ++ "  " ++ nextFunc ++ " env cont " ++ var ++ " (Just [])"
+  AstValue $ indentation <> "  " <> nextFunc <> " env cont " <> var <> " (Just [])"
 createAstCont (CompileOptions _ _ _ Nothing) var indentation = do
-  AstValue $ indentation ++ "  continueEval env cont " ++ var ++ " Nothing"
+  AstValue $ indentation <> "  continueEval env cont " <> var <> " Nothing"
 
 
 --  FUTURE: is this even necessary? Would just a string be good enough?
 
 -- |A very basic type to store a Haskell AST.
-data HaskAST = AstAssignM String HaskAST
-  | AstFunction {astfName :: String,
---                 astfType :: String,
-                 astfArgs :: String,
+data HaskAST = AstAssignM Text HaskAST
+  | AstFunction {astfName :: Text,
+--                 astfType :: Text,
+                 astfArgs :: Text,
                  astfCode :: [HaskAST]
                 } 
- | AstValue String
- | AstRef String
- | AstContinuation {astcNext :: String,
-                    astcArgs :: String
+ | AstValue Text
+ | AstRef Text
+ | AstContinuation {astcNext :: Text,
+                    astcArgs :: Text
                    }
 
 -- |Generate code based on the given Haskell AST
-showValAST :: HaskAST -> String
-showValAST (AstAssignM var val) = "  " ++ var ++ " <- " ++ show val
+showValAST :: HaskAST -> Text
+showValAST (AstAssignM var val) = "  " <> var <> " <- " <> (T.pack . show) val
 showValAST (AstFunction name args code) = do
-  let typeSig = "\n" ++ name ++ " :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError r (LispVal m r) "
-  let fheader = "\n" ++ name ++ args ++ " = do "
-  let fbody = unwords . map (\x -> '\n' : x ) $ map showValAST code
+  let typeSig = "\n" <> name <> " :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError r (LispVal m r) "
+  let fheader = "\n" <> name <> args <> " = do "
+  let fbody = T.unwords . map (\x -> "\n" <> x ) $ map showValAST code
 #ifdef UseDebug
   let appendArg arg = do
         if Data.List.isInfixOf arg args
-           then " ++ \" \" ++ " ++ (show arg) ++ 
-                " ++ \" [\" ++ (show " ++ arg ++ ")" ++ 
-                " ++ \"] \""
+           then " <> \" \" <> " <> ((T.pack . show) arg) <> 
+                " <> \" [\" <> ((T.pack . show) " <> arg <> ")" <> 
+                " <> \"] \""
            else ""
-  let fdebug = "\n  _ <- liftIO $ (trace (\"" ++ 
-               name ++ "\"" ++ 
-               (appendArg "value") ++ 
-               (appendArg "args") ++ 
+  let fdebug = "\n  _ <- liftIO $ (trace (\"" <> 
+               name <> "\"" <> 
+               (appendArg "value") <> 
+               (appendArg "args") <> 
                ") getCPUTime)"
-  typeSig ++ fheader ++ fdebug ++ fbody 
+  typeSig <> fheader <> fdebug <> fbody 
 #else
-  typeSig ++ fheader ++ fbody 
+  typeSig <> fheader <> fbody 
 #endif
 showValAST (AstValue v) = v
 showValAST (AstRef v) = v
 showValAST (AstContinuation nextFunc args) =
-    "  continueEval env (makeCPSWArgs env cont " ++ 
-       nextFunc ++ " " ++ args ++ ") (Nil \"\") Nothing "
+    "  continueEval env (makeCPSWArgs env cont " <> 
+       nextFunc <> " " <> args <> ") (Nil \"\") Nothing "
 
-instance Show HaskAST where show = showValAST
+instance Show HaskAST where show = T.unpack . showValAST
 
--- |A utility function to join list members together
-joinL 
-  :: forall a. [[a]] -- ^ Original list-of-lists
-  -> [a] -- ^ Separator 
-  -> [a] -- ^ Joined list
-joinL ls sep = Data.List.intercalate sep ls
+-- |A utility function to join Text lists together
+joinL :: [Text] -> Text -> Text
+joinL = flip T.intercalate
 
 -- |Convert abstract syntax tree to a string
-ast2Str :: LispVal m r -> String 
-ast2Str (String s) = "String " ++ show s
-ast2Str (Char c) = "Char " ++ show c
-ast2Str (Atom a) = "Atom " ++ show a
-ast2Str (Number n) = "Number (" ++ show n ++ ")"
-ast2Str (Complex c) = "Complex $ (" ++ (show $ DC.realPart c) ++ ") :+ (" ++ (show $ DC.imagPart c) ++ ")"
-ast2Str (Rational r) = "Rational $ (" ++ (show $ DR.numerator r) ++ ") % (" ++ (show $ DR.denominator r) ++ ")"
-ast2Str (Float f) = "Float (" ++ show f ++ ")"
+ast2Str :: LispVal m r -> Text 
+ast2Str (Text s) = "Text " <> (T.pack . show) s
+ast2Str (Char c) = "Char " <> (T.pack . show) c
+ast2Str (Atom a) = "Atom " <> (T.pack . show) a
+ast2Str (Number n) = "Number (" <> (T.pack . show) n <> ")"
+ast2Str (Complex c) = "Complex $ (" <> ((T.pack . show) $ DC.realPart c) <> ") :+ (" <> ((T.pack . show) $ DC.imagPart c) <> ")"
+ast2Str (Rational r) = "Rational $ (" <> ((T.pack . show) $ DR.numerator r) <> ") % (" <> ((T.pack . show) $ DR.denominator r) <> ")"
+ast2Str (Float f) = "Float (" <> (T.pack . show) f <> ")"
 ast2Str (Bool True) = "Bool True"
 ast2Str (Bool False) = "Bool False"
 ast2Str (HashTable ht) = do
  let ls = Data.Map.toList ht 
-     conv (a, b) = "(" ++ ast2Str a ++ "," ++ ast2Str b ++ ")"
- "HashTable $ Data.Map.fromList $ [" ++ joinL (map conv ls) "," ++ "]"
+     conv (a, b) = "(" <> ast2Str a <> "," <> ast2Str b <> ")"
+ "HashTable $ Data.Map.fromList $ [" <> joinL (map conv ls) "," <> "]"
 ast2Str (Vector v) = do
   let ls = Data.Array.elems v
       size = (length ls) - 1
-  "Vector (listArray (0, " ++ show size ++ ")" ++ "[" ++ joinL (map ast2Str ls) "," ++ "])"
+  "Vector (listArray (0, " <> (T.pack . show) size <> ")" <> "[" <> joinL (map ast2Str ls) "," <> "])"
 ast2Str (ByteVector bv) = do
   let ls = BS.unpack bv
-  "ByteVector ( BS.pack " ++ "[" ++ joinL (map show ls) "," ++ "])"
-ast2Str (List ls) = "List [" ++ joinL (map ast2Str ls) "," ++ "]"
+  "ByteVector ( BS.pack " <> "[" <> joinL (map (T.pack . show) ls) "," <> "])"
+ast2Str (List ls) = "List [" <> joinL (map ast2Str ls) "," <> "]"
 ast2Str (DottedList ls l) = 
-  "DottedList [" ++ joinL (map ast2Str ls) "," ++ "] $ " ++ ast2Str l
-ast2Str l = show l -- Error?
+  "DottedList [" <> joinL (map ast2Str ls) "," <> "] $ " <> ast2Str l
+ast2Str l = (T.pack . show) l -- Error?
 
 -- |Convert a list of abstract syntax trees to a list of strings
-asts2Str :: [LispVal m r] -> String
+asts2Str :: [LispVal m r] -> Text
 asts2Str ls = do
-    "[" ++ (joinL (map ast2Str ls) ",") ++ "]"
+    "[" <> (joinL (map ast2Str ls) ",") <> "]"
 
 -- |Header comment used at the top of a Haskell program generated
 --  by the compiler
-headerComment:: [String]
+headerComment:: [Text]
 headerComment = [
    "--"
  , "-- This file was automatically generated by the husk scheme compiler (huskc)"
  , "--"
  , "--  http://justinethier.github.io/husk-scheme "
  , "--  (c) 2010 Justin Ethier "
- , "--  Version " ++ LSC.version
+ , "--  Version " <> LSC.version
  , "--"]
 
 -- |Main module used in a compiled Haskell program
-headerModule :: [String]
+headerModule :: [Text]
 headerModule = ["module Main where "]
 
 -- |Imports used for a compiled program
-headerImports :: [String]
+headerImports :: [Text]
 headerImports = [
    "Language.Scheme.Core "
  , "Language.Scheme.Numerical "
@@ -230,7 +231,7 @@ headerImports = [
 
 -- |Block of code used in the header of a Haskell program 
 --  generated by the compiler.
-header :: String -> Bool -> String -> [String]
+header :: Text -> Bool -> Text -> [Text]
 header filepath useCompiledLibs langRev = do
   let env = if useCompiledLibs
             then "primitiveBindings"
@@ -251,7 +252,7 @@ header filepath useCompiledLibs langRev = do
     , "  return $ case v of "
     , "    List _ -> Pointer var env "
     , "    DottedList _ _ -> Pointer var env "
-    , "    String _ -> Pointer var env "
+    , "    Text _ -> Pointer var env "
     , "    Vector _ -> Pointer var env "
     , "    ByteVector _ -> Pointer var env "
     , "    HashTable _ -> Pointer var env "
@@ -264,23 +265,23 @@ header filepath useCompiledLibs langRev = do
     , "  apply cont a as "
     , " "
     , "applyWrapper env cont value (Just (a:as))  = do "
-    , "  apply cont a $ as ++ [value] "
+    , "  apply cont a $ as <> [value] "
     , " "
     , "getDataFileName' :: FilePath -> IO FilePath "
-    , "getDataFileName' name = return $ \"" ++ (Language.Scheme.Util.escapeBackslashes filepath) ++ "\" ++ name "
+    , "getDataFileName' name = return $ \"" <> (Language.Scheme.Util.escapeBackslashes filepath) <> "\" <> name "
     , " "]
-    ++ initSrfi55 ++ 
+    <> initSrfi55 <> 
     [ " "
     , "main :: IO () "
     , "main = do "
-    , "  env <- " ++ env ++ " "
-    , "  result <- (runIOThrows $ liftM show $ hsInit env (makeNullContinuation env) (Nil \"\") Nothing) "
+    , "  env <- " <> env <> " "
+    , "  result <- (runIOThrows $ liftM (T.pack . show) $ hsInit env (makeNullContinuation env) (Nil \"\") Nothing) "
     , "  case result of "
     , "    Just errMsg -> putStrLn errMsg "
     , "    _ -> return () "
     , " "
     , "hsInit env cont _ _ = do "
-    , "  _ <- defineVar env \"" ++ moduleRuntimeVar ++ "\" $ HashTable $ Data.Map.fromList [] "
+    , "  _ <- defineVar env \"" <> moduleRuntimeVar <> "\" $ HashTable $ Data.Map.fromList [] "
     , "  run env cont (Nil \"\") (Just [])"
     , " "]
 

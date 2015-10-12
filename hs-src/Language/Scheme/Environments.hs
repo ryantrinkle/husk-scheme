@@ -1,5 +1,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE OverloadedStrings #-}
+
 {- |
 Module      : Language.Scheme.Environments
 Copyright   : Justin Ethier
@@ -25,9 +27,11 @@ import Language.Scheme.Variables
 import Control.Monad.Except
 import qualified Data.Char
 import System.IO
+import Data.Text (Text)
+import qualified Data.Text as T
 
 -- |Primitive functions that execute within the IO monad
-ioPrimitives :: (MonadIO m, MonadSerial m, ReadRef r m, PtrEq m r) => [(String, [LispVal m r] -> ExceptT (LispError m r) m (LispVal m r))]
+ioPrimitives :: (MonadIO m, MonadSerial m, ReadRef r m, PtrEq m r) => [(Text, [LispVal m r] -> ExceptT (LispError m r) m (LispVal m r))]
 ioPrimitives = [("open-input-file", makePort openFile ReadMode ),
                 ("open-binary-input-file", makePort openBinaryFile ReadMode),
                 ("open-output-file", makePort openFile WriteMode),
@@ -75,7 +79,7 @@ ioPrimitives = [("open-input-file", makePort openFile ReadMode ),
                 ("write-string", writeString),
                 ("display", writeProc (\ port obj -> do
                   case obj of
-                    String str -> hPutStr port str
+                    Text str -> hPutStr port $ T.unpack str
                     _ -> hPutStr port $ show obj)),
 
                 -- husk internal functions
@@ -93,7 +97,7 @@ ioPrimitives = [("open-input-file", makePort openFile ReadMode ),
 printEnv' :: (MonadIO m, ReadRef r m) => [LispVal m r] -> IOThrowsError m r (LispVal m r)
 printEnv' [LispEnv env] = do
     result <- lift $ printEnv env
-    return $ String result
+    return $ Text result
 printEnv' [] = throwError $ NumArgs (Just 1) []
 printEnv' args = throwError $ TypeMismatch "env" $ List args
 
@@ -103,7 +107,7 @@ exportsFromEnv' [LispEnv env] = do
     return $ List result
 exportsFromEnv' _ = return $ List []
 
-virtualIoPrimitives :: (MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, PtrEq m r) => [(String, [LispVal m r] -> ExceptT (LispError m r) m (LispVal m r))]
+virtualIoPrimitives :: (MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, PtrEq m r) => [(Text, [LispVal m r] -> ExceptT (LispError m r) m (LispVal m r))]
 virtualIoPrimitives = [("gensym", gensym),
 
                        -- From SRFI 96
@@ -178,7 +182,7 @@ virtualIoPrimitives = [("gensym", gensym),
                       ]
 
 -- | Pure primitive functions
-primitives :: [(String, [LispVal m r] -> ThrowsError m r (LispVal m r))]
+primitives :: [(Text, [LispVal m r] -> ThrowsError m r (LispVal m r))]
 primitives = [("+", numAdd),
               ("-", numSub),
               ("*", numMul),

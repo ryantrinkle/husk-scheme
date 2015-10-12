@@ -56,11 +56,11 @@ main = do
 
 -- |Data type to handle command line options that take parameters
 data Options = Options {
-    optOutput :: Maybe String, -- Executable file to write
+    optOutput :: Maybe Text, -- Executable file to write
     optLibs :: Bool, -- Debug flag, whether to compile standard libraries
     optDynamic :: Bool, -- Flag for dynamic linking of compiled executable
-    optCustomOptions :: Maybe String, -- Custom options to ghc
-    optSchemeRev :: String -- Scheme Language version
+    optCustomOptions :: Maybe Text, -- Custom options to ghc
+    optSchemeRev :: Text -- Scheme Language version
     }
 
 -- |Default values for the command line options
@@ -137,7 +137,7 @@ showVersion _ = do
   exitSuccess
 
 -- |High level code to compile the given file
-process :: String -> String -> String -> Bool -> Bool -> String -> String -> Bool -> IO ()
+process :: Text -> Text -> Text -> Bool -> Bool -> Text -> Text -> Bool -> IO ()
 process inFile outHaskell outExec libs dynamic extraArgs langrev debugOpt = do
   env :: Env IO IORef <- case langrev of
             "7" -> Language.Scheme.Core.r7rsEnv'
@@ -155,10 +155,10 @@ process inFile outHaskell outExec libs dynamic extraArgs langrev debugOpt = do
    _ -> compileHaskellFile outHaskell outExec dynamic extraArgs
 
 -- |Compile a scheme file to haskell
-compileSchemeFile :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> Maybe String -> String -> String -> String -> String -> Bool -> IOThrowsError m r (LispVal m r)
+compileSchemeFile :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> Maybe Text -> Text -> Text -> Text -> Text -> Bool -> IOThrowsError m r (LispVal m r)
 compileSchemeFile env stdlib srfi55 filename outHaskell langrev _ = do
-  let conv :: LispVal m r -> String
-      conv (String s) = s
+  let conv :: LispVal m r -> Text
+      conv (Text s) = s
       conv l = show l
       compileLibraries = case stdlib of
         Just _ -> True
@@ -167,7 +167,7 @@ compileSchemeFile env stdlib srfi55 filename outHaskell langrev _ = do
   -- TODO: clean this up later
   --moduleFile <- liftIO $ getDataFileName "lib/modules.scm"
 
-  (String nextFunc, libsC, libSrfi55C, _) <- case (stdlib, langrev) of
+  (Text nextFunc, libsC, libSrfi55C, _) <- case (stdlib, langrev) of
     (Just stdlib', "5") -> do
       -- TODO: it is only temporary to compile the standard library each time. It should be 
       --       precompiled and just added during the ghc compilation
@@ -175,8 +175,8 @@ compileSchemeFile env stdlib srfi55 filename outHaskell langrev _ = do
       libSrfi55C <- compileLisp env srfi55 "exec55" (Just "exec55_3")
       --libModules <- compileLisp env moduleFile "exec55_2" (Just "exec55_3")
       lift $ Language.Scheme.Core.registerExtensions env $ liftIO . getDataFileName
-      return (String "exec", libsC, libSrfi55C, []) --libModules)
-    (_, _) -> return (String "run", [], [], [])
+      return (Text "exec", libsC, libSrfi55C, []) --libModules)
+    (_, _) -> return (Text "run", [], [], [])
 
   -- Initialize the compiler module and begin
   _ <- initializeCompiler env
@@ -209,7 +209,7 @@ compileSchemeFile env stdlib srfi55 filename outHaskell langrev _ = do
      else throwError $ Default "Empty file" --putStrLn "empty file"
 
 -- |Compile the intermediate haskell file using GHC
-compileHaskellFile :: String -> String -> Bool -> String -> IO() --ThrowsError m r (LispVal m r)
+compileHaskellFile :: Text -> Text -> Bool -> Text -> IO() --ThrowsError m r (LispVal m r)
 compileHaskellFile hsInFile objOutFile dynamic extraArgs = do
   let ghc = "ghc" -- Need to make configurable??
       dynamicArg = if dynamic then "-dynamic" else ""
@@ -222,7 +222,7 @@ compileHaskellFile hsInFile objOutFile dynamic extraArgs = do
     ExitSuccess -> return ()
 
 -- |Helper function to write a list of abstract Haskell code to file
-writeList :: Handle -> [String] -> IO ()
+writeList :: Handle -> [Text] -> IO ()
 writeList outH (l : ls) = do
   hPutStrLn outH l
   writeList outH ls

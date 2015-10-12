@@ -23,7 +23,7 @@ import Language.Scheme.Types
 -- ideas from http://therning.org/magnus/archives/719
 instance JSON LispVal where
   showJSON (List []) = JSNull
-  showJSON (String s) = JSString $ toJSString s
+  showJSON (Text s) = JSString $ toJSString s
   showJSON (Atom s) = JSString $ toJSString s
   showJSON (Bool b) = JSBool b
   showJSON (Number n) = JSRational False $ fromIntegral n 
@@ -34,13 +34,13 @@ instance JSON LispVal where
         f (List [Atom x, y]) = do
             (x, showJSON y)
     -- Take ls as an association list
-    -- The alist is then changed into the form [(String, x)]
+    -- The alist is then changed into the form [(Text, x)]
     -- and packaged into a JSObject
     JSObject $ toJSObject $ map f ls
   showJSON a = JSNull -- TODO (?): fail $ "Unable to convert to JSON: " ++ show a
 
   readJSON (JSNull) = return $ List []
-  readJSON (JSString str) = return $ String $ fromJSString str
+  readJSON (JSString str) = return $ Text $ fromJSString str
   readJSON (JSBool b) = return $ Bool b
   readJSON (JSRational _ num) = do
     let numer = abs $ numerator num
@@ -61,7 +61,7 @@ instance JSON LispVal where
 
 -- |Wrapper for Text.JSON.decode
 jsDecode :: [LispVal] -> IOThrowsError LispVal
-jsDecode [String json] = do
+jsDecode [Text json] = do
     let r = decode json :: Result LispVal
     case r of
         Ok result -> return result
@@ -70,7 +70,7 @@ jsDecode invalid = throwError $ TypeMismatch "string" $ List invalid
 
 -- |Wrapper for Text.JSON.decodeStrict
 jsDecodeStrict :: [LispVal] -> IOThrowsError LispVal
-jsDecodeStrict [String json] = do
+jsDecodeStrict [Text json] = do
     let r = decodeStrict json :: Result LispVal
     case r of
         Ok result -> return result
@@ -79,11 +79,11 @@ jsDecodeStrict invalid = jsDecode invalid
 
 -- |Wrapper for Text.JSON.encode
 jsEncode :: [LispVal] -> IOThrowsError LispVal
-jsEncode [val] = return $ String $ encode val
+jsEncode [val] = return $ Text $ encode val
 
 -- |Wrapper for Text.JSON.encodeStrict
 jsEncodeStrict :: [LispVal] -> IOThrowsError LispVal
-jsEncodeStrict [val] = return $ String $ encodeStrict val
+jsEncodeStrict [val] = return $ Text $ encodeStrict val
 
 _test :: IO ()
 _test = do
@@ -95,7 +95,7 @@ _test = do
     _testDecodeEncode "[1.1, 2, 3, 1.5]"
     _testDecodeEncode "[1.1, 2, {\"a\": 3}, 1.5]"
 
-_testDecodeEncode :: String -> IO ()
+_testDecodeEncode :: Text -> IO ()
 _testDecodeEncode str = do
     let x = decode  str :: Result LispVal
     case x of

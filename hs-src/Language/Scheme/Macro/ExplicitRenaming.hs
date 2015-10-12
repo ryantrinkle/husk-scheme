@@ -1,5 +1,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 {- |
 Module      : Language.Scheme.Macro.ExplicitRenaming
@@ -31,6 +32,8 @@ import Language.Scheme.Types
 import Language.Scheme.Variables
 import Language.Scheme.Primitives (MonadSerial, _gensym)
 import Control.Monad.Except
+import qualified Data.Text as T
+import Data.Monoid
 -- import Debug.Trace
 
 -- |Handle an explicit renaming macro
@@ -109,7 +112,7 @@ exRename useEnv _ srRenameEnv defEnv [Atom a] = do
             return $ Atom renamed
      else
        return $ Atom a
-exRename _ _ _ _ form = throwError $ Default $ "Unable to rename: " ++ show form
+exRename _ _ _ _ form = throwError $ Default $ "Unable to rename: " <> T.pack (show form)
 
 -- |The explicit renaming /compare/ function
 exCompare :: Monad m
@@ -121,5 +124,4 @@ exCompare :: Monad m
 exCompare _ _ _ [a, b] = do
   return $ Bool $ eqVal a b
 exCompare _ _ _ form = throwError $ 
-   Default $ "Unable to compare: " ++ show form
-
+   Default $ "Unable to compare: " <> T.pack (show form)

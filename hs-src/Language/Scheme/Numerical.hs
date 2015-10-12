@@ -1,4 +1,6 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE OverloadedStrings #-}
+
 {- |
 Module      : Language.Scheme.Numerical
 Copyright   : Justin Ethier
@@ -78,6 +80,8 @@ import Data.Fixed
 import Data.Ratio
 import Numeric
 import Text.Printf
+import Data.Text (Text)
+import qualified Data.Text as T
 
 -- |A helper function to perform a numeric operation on two values
 numericBinop :: (Integer -> Integer -> Integer) -> [LispVal m r] -> ThrowsError m r (LispVal m r)
@@ -527,18 +531,18 @@ numInexact2Exact badArgList = throwError $ NumArgs (Just 1) badArgList
 
 -- |Convert a number to a string; radix is optional, defaults to base 10
 num2String :: [LispVal m r] -> ThrowsError m r (LispVal m r)
-num2String [(Number n)] = return $ String $ show n
+num2String [(Number n)] = return $ Text $ T.pack $ show n
 num2String [(Number n), (Number radix)] = do
   case radix of
     2 -> do -- Nice tip from StackOverflow question #1959715
-             return $ String $ showIntAtBase 2 intToDigit n ""
-    8 -> return $ String $ printf "%o" n
-    10 -> return $ String $ printf "%d" n
-    16 -> return $ String $ printf "%x" n
+             return $ Text $ T.pack $ showIntAtBase 2 intToDigit n ""
+    8 -> return $ Text $ T.pack $ printf "%o" n
+    10 -> return $ Text $ T.pack $ printf "%d" n
+    16 -> return $ Text $ T.pack $ printf "%x" n
     _ -> throwError $ BadSpecialForm "Invalid radix value" $ Number radix
-num2String [n@(Rational _)] = return $ String $ show n
-num2String [(Float n)] = return $ String $ show n
-num2String [n@(Complex _)] = return $ String $ show n
+num2String [n@(Rational _)] = return $ Text $ T.pack $ show n
+num2String [(Float n)] = return $ Text $ T.pack $ show n
+num2String [n@(Complex _)] = return $ Text $ T.pack $ show n
 num2String [x] = throwError $ TypeMismatch "number" x
 num2String badArgList = throwError $ NumArgs (Just 1) badArgList
 

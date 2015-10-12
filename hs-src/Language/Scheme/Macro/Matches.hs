@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 {- | 
 Module      : Language.Scheme.Macro.Matches
 Copyright   : Justin Ethier
@@ -13,6 +15,7 @@ by storing and/or manipulating data involving 0-or-many matches.
 module Language.Scheme.Macro.Matches (getData, setData) where
 import Language.Scheme.Types
 import Control.Exception
+import Data.Text (Text)
 --import Debug.Trace
 
 -- |Create a nested list

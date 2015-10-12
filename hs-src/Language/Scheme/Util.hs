@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 {- |
 Module      : Language.Scheme.Util
 Copyright   : Justin Ethier
@@ -18,29 +19,28 @@ module Language.Scheme.Util
     , strip
     ) where
 
+import Data.Text (Text)
+import qualified Data.Text as T
 import qualified Data.List as DL
 
 -- |A utility function to escape backslashes in the given string
-escapeBackslashes :: String -> String
-escapeBackslashes = foldr step []
-  where step x xs  | x == '\\'  = '\\' : '\\' : xs
-                   | otherwise =  x : xs 
+escapeBackslashes :: Text -> Text
+escapeBackslashes = T.replace "\\" "\\\\"
 
 -- | Remove leading/trailing white space from a string; based on corresponding 
 --   Python function. Code taken from: 
 --
 --   <http://gimbo.org.uk/blog/2007/04/20/splitting-a-string-in-haskell/>
-strip :: String -> String
-strip s = dropWhile ws $ reverse $ dropWhile ws $ reverse s
-    where ws = (`elem` [' ', '\n', '\t', '\r'])
+strip :: Text -> Text
+strip = T.dropAround (`elem` [' ', '\n', '\t', '\r'])
 
 -- |Count occurences of a letter in a list of strings
-countAllLetters :: Char -> [String] -> Int
+countAllLetters :: Char -> [Text] -> Int
 countAllLetters c strs = sum $ map (countLetters c) strs
 
 -- |Count occurences of a letter in a string
-countLetters :: Char -> String -> Int
-countLetters c str = length $ filter (== c) str
+countLetters :: Char -> Text -> Int
+countLetters c str = T.count (T.singleton c) str
 
 -- | Take last n elements of a list, from:
 --   <http://stackoverflow.com/q/17252851/101258>

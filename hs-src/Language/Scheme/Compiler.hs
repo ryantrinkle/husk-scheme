@@ -1,5 +1,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE OverloadedStrings #-}
+
 {- |
 Module      : Language.Scheme.Compiler
 Copyright   : Justin Ethier
@@ -12,7 +14,7 @@ Portability : portable
 This module contains a Scheme to Haskell compiler which performs the following 
 transformations:
 
-> Scheme AST (LispVal) => Haskell AST (HaskAST) => Compiled Code (String)
+> Scheme AST (LispVal) => Haskell AST (HaskAST) => Compiled Code (Text)
 
 The GHC compiler is then used to create a native executable. At present, the 
 focus has just been on creating a compiler that will generate correct, working 
@@ -62,6 +64,9 @@ import Language.Scheme.Variables
 import Control.Monad.Except
 import qualified Data.List
 import Data.Maybe (fromMaybe)
+import Data.Text (Text)
+import qualified Data.Text as T
+import Data.Monoid
 
 -- |Perform one-time initialization of the compiler's environment
 initializeCompiler :: (ReadRef r m, WriteRef r m, NewRef r m) => Env m r -> IOThrowsError m r [HaskAST]
@@ -76,9 +81,9 @@ initializeCompiler env = do
 compileLisp 
     :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r)
     => Env m r  -- ^ Compiler environment 
-    -> String -- ^ Filename
-    -> String -- ^ Function entry point (code calls into this function)
-    -> Maybe String -- ^ Function exit point, if any
+    -> Text -- ^ Filename
+    -> Text -- ^ Function entry point (code calls into this function)
+    -> Maybe Text -- ^ Function exit point, if any
     -> IOThrowsError m r [HaskAST]
 compileLisp env filename entryPoint exitPoint = do
     filename' <- LSC.findFileOrLib filename 
@@ -90,13 +95,13 @@ compileLisp env filename entryPoint exitPoint = do
         _ -> return ast
 
 -- |Compile a list (block) of Scheme code
-compileBlock :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => String -> Maybe String -> Env m r -> [HaskAST] -> [LispVal m r] 
+compileBlock :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Text -> Maybe Text -> Env m r -> [HaskAST] -> [LispVal m r] 
              -> IOThrowsError m r [HaskAST]
 compileBlock symThisFunc symLastFunc env result lisps = do
   _ <- defineTopLevelVars env lisps
   _compileBlock symThisFunc symLastFunc env result lisps
 
-_compileBlock :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => String -> Maybe String -> Env m r -> [HaskAST] -> [LispVal m r]
+_compileBlock :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Text -> Maybe Text -> Env m r -> [HaskAST] -> [LispVal m r]
               -> IOThrowsError m r [HaskAST]
 _compileBlock symThisFunc symLastFunc env result [c] = do
   let copts = CompileOptions symThisFunc False False symLastFunc 
@@ -150,12 +155,12 @@ _compileBlockDo fnc result c =
     -- Discard a value by itself
     [AstValue _] -> fnc result
     [AstRef _] -> fnc result
-    _ -> fnc $ result ++ c
+    _ -> fnc $ result <> c
 
 -- TODO: could everything just be regular function calls except when a continuation is 'added to the stack' via a makeCPS(makeCPSWArgs ...) ?? I think this could be made more efficient
 
 -- |Helper function to compile expressions consisting of a scalar
-compileScalar :: Monad m => String -> CompOpts -> IOThrowsError m r [HaskAST]
+compileScalar :: Monad m => Text -> CompOpts -> IOThrowsError m r [HaskAST]
 compileScalar val copts = do 
   f <- return $ AstAssignM "x1" $ AstValue val 
   c <- return $ createAstCont copts "x1" ""
@@ -164,8 +169,8 @@ compileScalar val copts = do
 compileScalar' :: Monad m => HaskAST -> CompOpts -> IOThrowsError m r [HaskAST]
 compileScalar' val copts = do 
   let fCode = case val of
-          AstValue v -> AstValue $ "  let x1 = " ++ v 
-          AstRef r -> AstValue $ "  x1 <- " ++ r
+          AstValue v -> AstValue $ "  let x1 = " <> v 
+          AstRef r -> AstValue $ "  x1 <- " <> r
           _ -> AstValue $ "Unexpected compiler error in compileScalar' "
   -- TODO: _
   f <- return $ fCode
@@ -173,13 +178,13 @@ compileScalar' val copts = do
   return [createAstFunc copts [f, c]]
 
 -- |Compile the list of arguments for a function
-compileLambdaList :: Monad m => [LispVal m r] -> IOThrowsError m r String
+compileLambdaList :: Monad m => [LispVal m r] -> IOThrowsError m r Text
 compileLambdaList l = do
-  serialized <- mapM serialize l 
-  return $ "[" ++ Data.List.intercalate "," serialized ++ "]"
- where serialize (Atom a) = return $ (show a)
+  serialized <- mapM serialize l
+  return $ "[" <> T.intercalate "," serialized <> "]"
+ where serialize (Atom a) = return $ T.pack $ show a
        serialize a = throwError $ Default $ 
-                         "invalid parameter to lambda list: " ++ show a
+                         "invalid parameter to lambda list: " <> T.pack (show a)
 
 -- |Add lambda variables to the compiler's environment
 defineLambdaVars :: (ReadRef r m, WriteRef r m, NewRef r m) => Env m r -> [LispVal m r] -> IOThrowsError m r (LispVal m r)
@@ -206,7 +211,7 @@ defineTopLevelVars env ((List (Atom "define" : DottedList (Atom var : _) _ : _))
 defineTopLevelVars env (_ : ls) = defineTopLevelVars env ls
 defineTopLevelVars _ _ = return nullLisp 
 
-defineTopLevelVar :: (ReadRef r m, WriteRef r m, NewRef r m) => Env m r -> String -> IOThrowsError m r (LispVal m r)
+defineTopLevelVar :: (ReadRef r m, WriteRef r m, NewRef r m) => Env m r -> Text -> IOThrowsError m r (LispVal m r)
 defineTopLevelVar env var = do
   defineVar env var $ Number 0 -- Actual value not loaded at the moment 
 
@@ -224,8 +229,8 @@ compile env
                    mods 
                   (CompileLibraryOptions compileBlock compileLisp) 
                    copts
-compile _ (Nil n) _              = return [AstValue $ "Nil " ++ (show n)]
-compile _ v@(String _) _         = return [AstValue $ ast2Str v]
+compile _ (Nil n) _              = return [AstValue $ "Nil " <> T.pack (show n)]
+compile _ v@(Text _) _         = return [AstValue $ ast2Str v]
 compile _ v@(Char _) _           = return [AstValue $ ast2Str v]
 compile _ v@(Complex _) _        = return [AstValue $ ast2Str v]
 compile _ v@(Float _) _          = return [AstValue $ ast2Str v]
@@ -241,16 +246,16 @@ compile env (Atom a) _ = do
    True -> do
 -- TODO: this is not good enough, will probably have to 
 --       return as a new type (AstGetVariable?)
-     return [AstRef $ "getRTVar env \"" ++ a ++ "\""] 
+     return [AstRef $ "getRTVar env \"" <> a <> "\""] 
    False -> throwError $ UnboundVar "Variable is not defined" a
 
 compile _ (List [Atom "quote", val]) copts = 
-  compileScalar (" return $ " ++ ast2Str val) copts
+  compileScalar (" return $ " <> ast2Str val) copts
 
 compile env ast@(List [Atom "expand",  _body]) copts = do
   compileSpecialFormBody env ast copts (\ _ -> do
     val <- Language.Scheme.Macro.expand env False _body LSC.apply
-    compileScalar (" return $ " ++ ast2Str val) copts)
+    compileScalar (" return $ " <> ast2Str val) copts)
 
 compile env ast@(List (Atom "let-syntax" : List _bindings : _body)) 
         copts@(CompileOptions thisFnc a b nextFnc) = do
@@ -261,9 +266,9 @@ compile env ast@(List (Atom "let-syntax" : List _bindings : _body))
     expanded <- Language.Scheme.Macro.expand bodyEnv False (List _body) LSC.apply
 
     Atom loadMacroSym <- _gensym "loadMacroStub"
-    stub <- compileScalar (" Language.Scheme.Macro.loadMacros env env Nothing False " ++ (asts2Str _bindings)) (CompileOptions thisFnc False False (Just loadMacroSym))
+    stub <- compileScalar (" Language.Scheme.Macro.loadMacros env env Nothing False " <> (asts2Str _bindings)) (CompileOptions thisFnc False False (Just loadMacroSym))
     rest <- divertVars bodyEnv expanded (CompileOptions loadMacroSym a b nextFnc) compexp
-    return $ stub ++ rest)
+    return $ stub <> rest)
  where 
      -- Pick up execution here after expansion
      compexp bodyEnv' expanded' copts' = do
@@ -280,9 +285,9 @@ compile env ast@(List (Atom "letrec-syntax" : List _bindings : _body))
     expanded <- Language.Scheme.Macro.expand bodyEnv False (List _body) LSC.apply
 
     Atom loadMacroSym <- _gensym "loadMacroStub"
-    stub <- compileScalar (" Language.Scheme.Macro.loadMacros env env Nothing False " ++ (asts2Str _bindings)) (CompileOptions thisFnc False False (Just loadMacroSym))
+    stub <- compileScalar (" Language.Scheme.Macro.loadMacros env env Nothing False " <> (asts2Str _bindings)) (CompileOptions thisFnc False False (Just loadMacroSym))
     rest <- divertVars bodyEnv expanded (CompileOptions loadMacroSym a b nextFnc) compexp
-    return $ stub ++ rest)
+    return $ stub <> rest)
   where 
      -- Pick up execution here after expansion
      compexp bodyEnv' expanded' copts' = do
@@ -301,14 +306,14 @@ compile env
     Just m -> do
         _ <- defineNamespacedVar env Macro newKeyword m
         compFunc <- return $ [
-          AstValue $ "  bound <- getNamespacedVar' env Macro \"" ++ 
-                          keyword ++ "\"",
+          AstValue $ "  bound <- getNamespacedVar' env Macro \"" <> 
+                          keyword <> "\"",
           AstValue $ "  case bound of ",
           AstValue $ "    Just m -> ",
-          AstValue $ "      defineNamespacedVar env Macro \"" ++ 
-                              newKeyword ++ "\" m",
-          AstValue $ "    Nothing -> throwError $ TypeMismatch \"macro\" $ " ++ 
-                             "Atom \"" ++ keyword ++ "\"",
+          AstValue $ "      defineNamespacedVar env Macro \"" <> 
+                              newKeyword <> "\" m",
+          AstValue $ "    Nothing -> throwError $ TypeMismatch \"macro\" $ " <> 
+                             "Atom \"" <> keyword <> "\"",
           createAstCont copts "(Nil \"\")" ""]
         return $ [createAstFunc copts compFunc]
     Nothing -> throwError $ TypeMismatch "macro" $ Atom keyword
@@ -326,8 +331,8 @@ compile env ast@(List [Atom "define-syntax", Atom keyword,
     _ <- defineNamespacedVar env Macro keyword $ SyntaxExplicitRenaming f
   
     compFunc <- return $ [
-      AstValue $ "  f <- makeNormalFunc env " ++ fparamsStr ++ " " ++ fbodyStr, 
-      AstValue $ "  defineNamespacedVar env Macro \"" ++ keyword ++ 
+      AstValue $ "  f <- makeNormalFunc env " <> fparamsStr <> " " <> fbodyStr, 
+      AstValue $ "  defineNamespacedVar env Macro \"" <> keyword <> 
                       "\" $ SyntaxExplicitRenaming f",
       createAstCont copts "(Nil \"\")" ""]
     return $ [createAstFunc copts compFunc])
@@ -345,8 +350,8 @@ compile env lisp@(List [Atom "define-syntax", Atom keyword,
     -- And load it at runtime as well
     -- Env should be identical to the one loaded at compile time...
     compileScalar 
-      ("  defineNamespacedVar env Macro \"" ++ keyword ++ 
-       "\" $ Syntax (Just env) Nothing False \"" ++ ellipsis ++ "\" " ++ idStr ++ " " ++ ruleStr) copts)
+      ("  defineNamespacedVar env Macro \"" <> keyword <> 
+       "\" $ Syntax (Just env) Nothing False \"" <> ellipsis <> "\" " <> idStr <> " " <> ruleStr) copts)
 
 compile env lisp@(List [Atom "define-syntax", Atom keyword, 
     (List (Atom "syntax-rules" : (List identifiers : rules)))]) copts = do
@@ -361,8 +366,8 @@ compile env lisp@(List [Atom "define-syntax", Atom keyword,
     -- And load it at runtime as well
     -- Env should be identical to the one loaded at compile time...
     compileScalar 
-      ("  defineNamespacedVar env Macro \"" ++ keyword ++ 
-       "\" $ Syntax (Just env) Nothing False \"...\" " ++ idStr ++ " " ++ ruleStr) copts)
+      ("  defineNamespacedVar env Macro \"" <> keyword <> 
+       "\" $ Syntax (Just env) Nothing False \"...\" " <> idStr <> " " <> ruleStr) copts)
 
 compile env ast@(List [Atom "if", predic, conseq]) copts = 
   compileSpecialFormBody env ast copts (\ _ -> do
@@ -376,8 +381,8 @@ compile env ast@(List [Atom "if", predic, conseq, alt]) copts = do
     Atom symAlternate <- _gensym "compiledAlternative"
 
     -- Entry point; ensure if is not rebound
-    f <- return [AstValue $ "  " ++ symPredicate ++
-                            " env (makeCPSWArgs env cont " ++ symCheckPredicate ++ " []) " ++ 
+    f <- return [AstValue $ "  " <> symPredicate <>
+                            " env (makeCPSWArgs env cont " <> symCheckPredicate <> " []) " <> 
                             " (Nil \"\") (Just []) "]
     -- Compile expression for if's args
     compPredicate <- wrapObject symPredicate Nothing =<<
@@ -396,12 +401,12 @@ compile env ast@(List [Atom "if", predic, conseq, alt]) copts = do
 -- FUTURE: could call a runtime function to do this, and save some code ??
     compCheckPredicate <- return $ AstFunction symCheckPredicate " env cont result _ " [
        AstValue $ "  case result of ",
-       AstValue $ "    Bool False -> " ++ symAlternate ++ " env cont (Nil \"\") (Just []) ",
-       AstValue $ "    _ -> " ++ symConsequence ++ " env cont (Nil \"\") (Just []) "]
+       AstValue $ "    Bool False -> " <> symAlternate <> " env cont (Nil \"\") (Just []) ",
+       AstValue $ "    _ -> " <> symConsequence <> " env cont (Nil \"\") (Just []) "]
     
     -- Join compiled code together
-    return $ [createAstFunc copts f] ++ compPredicate ++ [compCheckPredicate] ++ 
-              compConsequence ++ compAlternate)
+    return $ [createAstFunc copts f] <> compPredicate <> [compCheckPredicate] <> 
+              compConsequence <> compAlternate)
 
 compile env ast@(List [Atom "set!", Atom var, form]) copts@(CompileOptions {}) = do
   compileSpecialFormBody env ast copts (\ _ -> do
@@ -415,28 +420,28 @@ compile env ast@(List [Atom "set!", Atom var, form]) copts@(CompileOptions {}) =
     case compDefine of
       [(AstValue val)] -> do
         return [createAstFunc copts [
-            AstValue $ "  result <- setVar env \"" ++ var ++ "\" $ " ++ val,
+            AstValue $ "  result <- setVar env \"" <> var <> "\" $ " <> val,
             createAstCont copts "result" ""]]
       [(AstRef val)] -> do
         return [createAstFunc copts [
-            AstValue $ "  result <- setVar env \"" ++ var ++ "\" =<< " ++ val,
+            AstValue $ "  result <- setVar env \"" <> var <> "\" =<< " <> val,
             createAstCont copts "result" ""]]
       _ -> do
         entryPt <- compileSpecialFormEntryPoint "set!" symDefine copts
         compMakeDefine <- return $ AstFunction symMakeDefine " env cont result _ " [
-           AstValue $ "  _ <- setVar env \"" ++ var ++ "\" result",
+           AstValue $ "  _ <- setVar env \"" <> var <> "\" result",
            createAstCont copts "result" ""]
-        return $ [entryPt] ++ compDefine ++ [compMakeDefine])
+        return $ [entryPt] <> compDefine <> [compMakeDefine])
 
 compile env ast@(List [Atom "set!", nonvar, _]) copts = do 
   compileSpecialFormBody env ast copts (\ _ -> do
-    f <- compileSpecialForm "set!" ("throwError $ TypeMismatch \"variable\"" ++
-                            " $ String \"" ++ (show nonvar) ++ "\"")  copts
+    f <- compileSpecialForm "set!" ("throwError $ TypeMismatch \"variable\"" <>
+                            " $ Text \"" <> T.pack (show nonvar) <> "\"")  copts
     return [f])
 compile env ast@(List (Atom "set!" : args)) copts = do
   compileSpecialFormBody env ast copts (\ _ -> do
-    f <- compileSpecialForm "set!" ("throwError $ NumArgs 2 $ [String \"" ++ 
-            (show args) ++ "\"]") copts -- Cheesy to use a string, but fine for now...
+    f <- compileSpecialForm "set!" ("throwError $ NumArgs 2 $ [Text \"" <> 
+            T.pack (show args) <> "\"]") copts -- Cheesy to use a string, but fine for now...
     return [f])
 
 compile env ast@(List [Atom "define", Atom var, form]) copts@(CompileOptions {}) = do
@@ -463,19 +468,19 @@ compile env ast@(List [Atom "define", Atom var, form]) copts@(CompileOptions {})
     case compDefine of
       [(AstValue val)] -> do
         return [createAstFunc copts [
-            AstValue $ "  result <- defineVar env \"" ++ var ++ "\" $ " ++ val,
+            AstValue $ "  result <- defineVar env \"" <> var <> "\" $ " <> val,
             createAstCont copts "result" ""]]
       [(AstRef val)] -> do
         return [createAstFunc copts [
-            AstValue $ "  result <- defineVar env \"" ++ var ++ "\" =<< " ++ val,
+            AstValue $ "  result <- defineVar env \"" <> var <> "\" =<< " <> val,
             createAstCont copts "result" ""]]
       _ -> do
         f <- return $ [
-              AstValue $ "  " ++ symDefine ++ " env cont (Nil \"\") (Just [])" ]
+              AstValue $ "  " <> symDefine <> " env cont (Nil \"\") (Just [])" ]
         compMakeDefine <- return $ AstFunction symMakeDefine " env cont result _ " [
-           AstValue $ "  _ <- defineVar env \"" ++ var ++ "\" result",
+           AstValue $ "  _ <- defineVar env \"" <> var <> "\" result",
            createAstCont copts "result" ""]
-        return $ [createAstFunc copts f] ++ compDefine ++ [compMakeDefine])
+        return $ [createAstFunc copts f] <> compDefine <> [compMakeDefine])
 
 compile env ast@(List (Atom "define" : List (Atom var : fparams) : fbody)) 
         copts@(CompileOptions {}) = do
@@ -496,9 +501,9 @@ compile env ast@(List (Atom "define" : List (Atom var : fparams) : fbody))
    
     -- Entry point; ensure var is not rebound
     f <- return $ [
-          AstValue $ "  result <- makeNormalHFunc env (" ++ compiledParams ++ 
-                     ") " ++ symCallfunc,
-          AstValue $ "  _ <- defineVar env \"" ++ var ++ "\" result ",
+          AstValue $ "  result <- makeNormalHFunc env (" <> compiledParams <> 
+                     ") " <> symCallfunc,
+          AstValue $ "  _ <- defineVar env \"" <> var <> "\" result ",
           createAstCont copts "result" ""
           ]
     return $ (createAstFunc copts f) : compiledBody)
@@ -506,11 +511,11 @@ compile env ast@(List (Atom "define" : List (Atom var : fparams) : fbody))
 compile env 
         ast@(List (Atom "define" : DottedList (Atom var : fparams) varargs : fbody)) 
         copts@(CompileOptions {}) = do
-  _ <- validateFuncParams (fparams ++ [varargs]) Nothing
+  _ <- validateFuncParams (fparams <> [varargs]) Nothing
   compileSpecialFormBody env ast copts (\ _ -> do
     bodyEnv <- lift $ extendEnv env []
     -- bind lambda params in the extended env
-    _ <- defineLambdaVars bodyEnv $ (Atom var : fparams) ++ [varargs]
+    _ <- defineLambdaVars bodyEnv $ (Atom var : fparams) <> [varargs]
    
     Atom symCallfunc <- _gensym "defineFuncEntryPt"
     compiledParams <- compileLambdaList fparams
@@ -522,9 +527,9 @@ compile env
    
     -- Entry point; ensure var is not rebound
     f <- return $ [
-      AstValue $ "  result <- makeHVarargs (" ++ ast2Str varargs ++ ") env (" ++ 
-                       compiledParams ++ ") " ++ symCallfunc,
-      AstValue $ "  _ <- defineVar env \"" ++ var ++ "\" result ",
+      AstValue $ "  result <- makeHVarargs (" <> ast2Str varargs <> ") env (" <> 
+                       compiledParams <> ") " <> symCallfunc,
+      AstValue $ "  _ <- defineVar env \"" <> var <> "\" result ",
       createAstCont copts "result" "" ]
     return $ (createAstFunc copts f) : compiledBody)
 
@@ -543,29 +548,29 @@ compile env ast@(List (Atom "lambda" : List fparams : fbody))
    
     -- Entry point; ensure var is not rebound
     f <- return $ [
-          AstValue $ "  result <- makeNormalHFunc env (" ++ compiledParams ++ 
-                     ") " ++ symCallfunc,
+          AstValue $ "  result <- makeNormalHFunc env (" <> compiledParams <> 
+                     ") " <> symCallfunc,
           createAstCont copts "result" ""
           ]
     return $ (createAstFunc copts f) : compiledBody)
 
 compile env ast@(List (Atom "lambda" : DottedList fparams varargs : fbody)) 
         copts@(CompileOptions {}) = do
-  _ <- validateFuncParams (fparams ++ [varargs]) Nothing
+  _ <- validateFuncParams (fparams <> [varargs]) Nothing
   compileSpecialFormBody env ast copts (\ _ -> do
     Atom symCallfunc <- _gensym "lambdaFuncEntryPt"
     compiledParams <- compileLambdaList fparams
    
     bodyEnv <- lift $ extendEnv env []
     -- bind lambda params in the extended env
-    _ <- defineLambdaVars bodyEnv $ fparams ++ [varargs]
+    _ <- defineLambdaVars bodyEnv $ fparams <> [varargs]
    
     compiledBody <- compileBlock symCallfunc Nothing bodyEnv [] fbody
    
     -- Entry point; ensure var is not rebound
     f <- return $ [
-      AstValue $ "  result <- makeHVarargs (" ++ ast2Str varargs ++ ") env (" ++ 
-         compiledParams ++ ") " ++ symCallfunc,
+      AstValue $ "  result <- makeHVarargs (" <> ast2Str varargs <> ") env (" <> 
+         compiledParams <> ") " <> symCallfunc,
       createAstCont copts "result" "" ]
     return $ (createAstFunc copts f) : compiledBody)
 
@@ -582,7 +587,7 @@ compile env ast@(List (Atom "lambda" : varargs@(Atom _) : fbody))
    
     -- Entry point; ensure var is not rebound
     f <- return $ [
-          AstValue $ "  result <- makeHVarargs (" ++ ast2Str varargs ++ ") env [] " ++ symCallfunc,
+          AstValue $ "  result <- makeHVarargs (" <> ast2Str varargs <> ") env [] " <> symCallfunc,
           createAstCont copts "result" ""
           ]
     return $ (createAstFunc copts f) : compiledBody)
@@ -598,27 +603,27 @@ compile env ast@(List [Atom "string-set!", Atom var, i, character]) copts = do
     compChr <- wrapObject symChr (Just symDefine) =<<
         compileExpr env character symChr (Just symDefine)
     compDefine <- return $ AstFunction symDefine " env cont chr _ " [
-        AstValue $ "  " ++ symCompiledI ++ " env (makeCPSWArgs env cont " ++ 
-          symMakeDefine ++ " [chr]) (Nil \"\") (Just []) " ]
+        AstValue $ "  " <> symCompiledI <> " env (makeCPSWArgs env cont " <> 
+          symMakeDefine <> " [chr]) (Nil \"\") (Just []) " ]
     compI <- wrapObject symCompiledI Nothing =<<
         compileExpr env i symCompiledI Nothing
     compMakeDefine <- return $ AstFunction symMakeDefine " env cont idx (Just [chr]) " [
-       AstValue $ "  tmp <- getVar env \"" ++ var ++ "\"",
+       AstValue $ "  tmp <- getVar env \"" <> var <> "\"",
        AstValue $ "  derefValue <- recDerefPtrs tmp",
        AstValue $ "  result <- substr (derefValue, chr, idx)",
-       AstValue $ "  _ <- updateObject env \"" ++ var ++ "\" result",
+       AstValue $ "  _ <- updateObject env \"" <> var <> "\" result",
        createAstCont copts "result" ""]
-    return $ [entryPt, compDefine, compMakeDefine] ++ compI ++ compChr)
+    return $ [entryPt, compDefine, compMakeDefine] <> compI <> compChr)
 
 compile env ast@(List [Atom "string-set!", nonvar, _, _]) copts = do 
   compileSpecialFormBody env ast copts (\ _ -> do
-    f <- compileSpecialForm "string-set!" ("throwError $ TypeMismatch \"variable\"" ++
-                            " $ String \"" ++ (show nonvar) ++ "\"")  copts
+    f <- compileSpecialForm "string-set!" ("throwError $ TypeMismatch \"variable\"" <>
+                            " $ Text \"" <> T.pack (show nonvar) <> "\"")  copts
     return [f])
 compile env ast@(List (Atom "string-set!" : args)) copts = do
   compileSpecialFormBody env ast copts (\ _ -> do
-    f <- compileSpecialForm "string-set!" ("throwError $ NumArgs 3 $ [String \"" ++ 
-            (show args) ++ "\"]") copts
+    f <- compileSpecialForm "string-set!" ("throwError $ NumArgs 3 $ [Text \"" <> 
+            T.pack (show args) <> "\"]") copts
     return [f])
 
 compile env ast@(List [Atom "set-car!", Atom var, argObj]) copts = do
@@ -630,7 +635,7 @@ compile env ast@(List [Atom "set-car!", Atom var, argObj]) copts = do
    
     -- Code to all into next continuation from copts, if one exists
     let finalContinuation = case copts of
-          (CompileOptions _ _ _ (Just nextFunc)) -> "continueEval' e (makeCPSWArgs e c " ++ nextFunc ++ " [])\n"
+          (CompileOptions _ _ _ (Just nextFunc)) -> "continueEval' e (makeCPSWArgs e c " <> nextFunc <> " [])\n"
           _ -> "continueEval' e c\n"
    
     -- Entry point that allows set-car! to be redefined
@@ -638,9 +643,9 @@ compile env ast@(List [Atom "set-car!", Atom var, argObj]) copts = do
    
     -- Function to read existing var
     compGetVar <- return $ AstFunction symGetVar " env cont idx _ " [
-       AstValue $ "  result <- getVar env \"" ++ var ++ "\"",
+       AstValue $ "  result <- getVar env \"" <> var <> "\"",
        AstValue $ "  derefValue <- recDerefPtrs result",
-       AstValue $ "  " ++ symObj ++ " env cont derefValue (Just []) "]
+       AstValue $ "  " <> symObj <> " env cont derefValue (Just []) "]
    
     -- Compiled version of argObj
     compiledObj <- wrapObject symCompiledObj Nothing =<<
@@ -652,36 +657,36 @@ compile env ast@(List [Atom "set-car!", Atom var, argObj]) copts = do
     -- This is so verbose because we need to have overloads of symObj to 
     -- deal with many possible inputs.
     -- FUTURE: consider making these functions part of the runtime.
-    compObj <- return $ AstValue $ "" ++
-      symObj ++ " :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)\n" ++
-      symObj ++ " _ _ obj@(List []) _ = throwError $ TypeMismatch \"pair\" obj\n" ++
-      symObj ++ " e c obj@(List (_ : _)) _ = " ++ symCompiledObj ++ " e (makeCPSWArgs e c " ++ symDoSet ++ " [obj]) (Nil \"\") Nothing\n" ++
-      symObj ++ " e c obj@(DottedList _ _) _ = " ++ symCompiledObj ++ " e (makeCPSWArgs e c " ++ symDoSet ++ " [obj]) (Nil \"\") Nothing\n" ++
-      symObj ++ " _ _ obj _ = throwError $ TypeMismatch \"pair\" obj\n"
+    compObj <- return $ AstValue $ "" <>
+      symObj <> " :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)\n" <>
+      symObj <> " _ _ obj@(List []) _ = throwError $ TypeMismatch \"pair\" obj\n" <>
+      symObj <> " e c obj@(List (_ : _)) _ = " <> symCompiledObj <> " e (makeCPSWArgs e c " <> symDoSet <> " [obj]) (Nil \"\") Nothing\n" <>
+      symObj <> " e c obj@(DottedList _ _) _ = " <> symCompiledObj <> " e (makeCPSWArgs e c " <> symDoSet <> " [obj]) (Nil \"\") Nothing\n" <>
+      symObj <> " _ _ obj _ = throwError $ TypeMismatch \"pair\" obj\n"
    
     -- Function to do the actual (set!), based on code from Core
     --
     -- This is so verbose because we need to have overloads of symObj to deal 
     -- with many possible inputs.
     -- FUTURE: consider making these functions part of the runtime.
-    compDoSet <- return $ AstValue $ "" ++
-                 symDoSet ++ " :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)\n" ++
-                 symDoSet ++ " e c obj (Just [List (_ : ls)]) = updateObject e \"" ++ var ++ "\" (List (obj : ls)) >>= " ++ finalContinuation ++
-                 symDoSet ++ " e c obj (Just [DottedList (_ : ls) l]) = updateObject e \"" ++ var ++ "\" (DottedList (obj : ls) l) >>= " ++ finalContinuation ++
-                 symDoSet ++ " _ _ _ _ = throwError $ InternalError \"Unexpected argument to " ++ symDoSet ++ "\"\n"
+    compDoSet <- return $ AstValue $ "" <>
+                 symDoSet <> " :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)\n" <>
+                 symDoSet <> " e c obj (Just [List (_ : ls)]) = updateObject e \"" <> var <> "\" (List (obj : ls)) >>= " <> finalContinuation <>
+                 symDoSet <> " e c obj (Just [DottedList (_ : ls) l]) = updateObject e \"" <> var <> "\" (DottedList (obj : ls) l) >>= " <> finalContinuation <>
+                 symDoSet <> " _ _ _ _ = throwError $ InternalError \"Unexpected argument to " <> symDoSet <> "\"\n"
    
     -- Return a list of all the compiled code
-    return $ [entryPt, compGetVar, compObj, compDoSet] ++ compiledObj)
+    return $ [entryPt, compGetVar, compObj, compDoSet] <> compiledObj)
 
 compile env ast@(List [Atom "set-car!", nonvar, _]) copts = do 
   compileSpecialFormBody env ast copts (\ _ -> do
-    f <- compileSpecialForm "set-car!" ("throwError $ TypeMismatch \"variable\"" ++
-                            " $ String \"" ++ (show nonvar) ++ "\"")  copts
+    f <- compileSpecialForm "set-car!" ("throwError $ TypeMismatch \"variable\"" <>
+                            " $ Text \"" <> T.pack (show nonvar) <> "\"")  copts
     return [f])
 compile env ast@(List (Atom "set-car!" : args)) copts = do
   compileSpecialFormBody env ast copts (\ _ -> do
-    f <- compileSpecialForm "set-car!" ("throwError $ NumArgs 2 $ [String \"" ++ 
-            (show args) ++ "\"]") copts
+    f <- compileSpecialForm "set-car!" ("throwError $ NumArgs 2 $ [Text \"" <> 
+            T.pack (show args) <> "\"]") copts
     return [f])
 
 compile env ast@(List [Atom "set-cdr!", Atom var, argObj]) copts = do
@@ -693,7 +698,7 @@ compile env ast@(List [Atom "set-cdr!", Atom var, argObj]) copts = do
    
     -- Code to all into next continuation from copts, if one exists
     let finalContinuation = case copts of
-          (CompileOptions _ _ _ (Just nextFunc)) -> "continueEval' e (makeCPSWArgs e c " ++ nextFunc ++ " [])\n"
+          (CompileOptions _ _ _ (Just nextFunc)) -> "continueEval' e (makeCPSWArgs e c " <> nextFunc <> " [])\n"
           _ -> "continueEval' e c\n"
    
     -- Entry point that allows set-car! to be redefined
@@ -701,9 +706,9 @@ compile env ast@(List [Atom "set-cdr!", Atom var, argObj]) copts = do
    
     -- Function to read existing var
     compGetVar <- return $ AstFunction symGetVar " env cont idx _ " [
-       AstValue $ "  result <- getVar env \"" ++ var ++ "\"",
+       AstValue $ "  result <- getVar env \"" <> var <> "\"",
        AstValue $ "  derefValue <- recDerefPtrs result",
-       AstValue $ "  " ++ symObj ++ " env cont derefValue (Just []) "]
+       AstValue $ "  " <> symObj <> " env cont derefValue (Just []) "]
    
     -- Compiled version of argObj
     compiledObj <- wrapObject symCompiledObj Nothing =<<
@@ -713,45 +718,45 @@ compile env ast@(List [Atom "set-cdr!", Atom var, argObj]) copts = do
     --
     -- This is so verbose because we need to have overloads of symObj to deal with many possible inputs.
     -- FUTURE: consider making these functions part of the runtime.
-    compObj <- return $ AstValue $ "" ++
-      symObj ++ " :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)\n" ++
-      symObj ++ " _ _ obj@(List []) _ = throwError $ TypeMismatch \"pair\" obj\n" ++
+    compObj <- return $ AstValue $ "" <>
+      symObj <> " :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)\n" <>
+      symObj <> " _ _ obj@(List []) _ = throwError $ TypeMismatch \"pair\" obj\n" <>
    -- TODO: below, we want to make sure obj is of the right type. if so, 
    -- compile obj and call into the "set" 
    --       function below to do the actual set-car
-      symObj ++ " e c obj@(List (_ : _)) _ = " ++ symCompiledObj ++ " e (makeCPSWArgs e c " ++ symDoSet ++ " [obj]) (Nil \"\") Nothing\n" ++
-      symObj ++ " e c obj@(DottedList _ _) _ = " ++ symCompiledObj ++ " e (makeCPSWArgs e c " ++ symDoSet ++ " [obj]) (Nil \"\") Nothing\n" ++
-      symObj ++ " _ _ obj _ = throwError $ TypeMismatch \"pair\" obj\n"
+      symObj <> " e c obj@(List (_ : _)) _ = " <> symCompiledObj <> " e (makeCPSWArgs e c " <> symDoSet <> " [obj]) (Nil \"\") Nothing\n" <>
+      symObj <> " e c obj@(DottedList _ _) _ = " <> symCompiledObj <> " e (makeCPSWArgs e c " <> symDoSet <> " [obj]) (Nil \"\") Nothing\n" <>
+      symObj <> " _ _ obj _ = throwError $ TypeMismatch \"pair\" obj\n"
    
     -- Function to do the actual (set!), based on code from Core
     --
     -- This is so verbose because we need to have overloads of symObj 
     -- to deal with many possible inputs.
     -- FUTURE: consider making these functions part of the runtime.
-    compDoSet <- return $ AstValue $ "" ++
-      symDoSet ++ " :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)\n" ++
-      symDoSet ++ " e c obj (Just [List (l : _)]) = do\n" ++
-                  "   l' <- recDerefPtrs l\n" ++
-                  "   obj' <- recDerefPtrs obj\n" ++
-                  "   (cons [l', obj']) >>= updateObject e \"" ++ var ++ "\" >>= " ++ finalContinuation ++
-      symDoSet ++ " e c obj (Just [DottedList (l : _) _]) = do\n" ++
-                  "   l' <- recDerefPtrs l\n" ++
-                  "   obj' <- recDerefPtrs obj\n" ++
-                  "   (cons [l', obj']) >>= updateObject e \"" ++ var ++ "\" >>= " ++ finalContinuation ++
-      symDoSet ++ " _ _ _ _ = throwError $ InternalError \"Unexpected argument to " ++ symDoSet ++ "\"\n"
+    compDoSet <- return $ AstValue $ "" <>
+      symDoSet <> " :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)\n" <>
+      symDoSet <> " e c obj (Just [List (l : _)]) = do\n" <>
+                  "   l' <- recDerefPtrs l\n" <>
+                  "   obj' <- recDerefPtrs obj\n" <>
+                  "   (cons [l', obj']) >>= updateObject e \"" <> var <> "\" >>= " <> finalContinuation <>
+      symDoSet <> " e c obj (Just [DottedList (l : _) _]) = do\n" <>
+                  "   l' <- recDerefPtrs l\n" <>
+                  "   obj' <- recDerefPtrs obj\n" <>
+                  "   (cons [l', obj']) >>= updateObject e \"" <> var <> "\" >>= " <> finalContinuation <>
+      symDoSet <> " _ _ _ _ = throwError $ InternalError \"Unexpected argument to " <> symDoSet <> "\"\n"
    
     -- Return a list of all the compiled code
-    return $ [entryPt, compGetVar, compObj, compDoSet] ++ compiledObj)
+    return $ [entryPt, compGetVar, compObj, compDoSet] <> compiledObj)
 
 compile env ast@(List [Atom "set-cdr!", nonvar, _]) copts = do 
   compileSpecialFormBody env ast copts (\ _ -> do
-    f <- compileSpecialForm "set-cdr!" ("throwError $ TypeMismatch \"variable\"" ++
-                            " $ String \"" ++ (show nonvar) ++ "\"")  copts
+    f <- compileSpecialForm "set-cdr!" ("throwError $ TypeMismatch \"variable\"" <>
+                            " $ Text \"" <> T.pack (show nonvar) <> "\"")  copts
     return [f])
 compile env ast@(List (Atom "set-cdr!" : args)) copts = do
   compileSpecialFormBody env ast copts (\ _ -> do
-    f <- compileSpecialForm "set-cdr!" ("throwError $ NumArgs 2 $ [String \"" ++ 
-            (show args) ++ "\"]") copts
+    f <- compileSpecialForm "set-cdr!" ("throwError $ NumArgs 2 $ [Text \"" <> 
+            T.pack (show args) <> "\"]") copts
     return [f])
 
 compile env ast@(List [Atom "list-set!", Atom var, i, object]) copts = do
@@ -767,26 +772,26 @@ compile env ast@(List [Atom "list-set!", Atom var, i, object]) copts = do
     compiledIdx <- wrapObject symCompiledIdx (Just symIdxWrapper) =<<
         compileExpr env i symCompiledIdx (Just symIdxWrapper) 
     compiledIdxWrapper <- return $ AstFunction symIdxWrapper " env cont idx _ " [
-       AstValue $ "  " ++ symCompiledObj ++ " env (makeCPSWArgs env cont " ++ symUpdateVec ++ " [idx]) (Nil \"\") (Just []) " ]
+       AstValue $ "  " <> symCompiledObj <> " env (makeCPSWArgs env cont " <> symUpdateVec <> " [idx]) (Nil \"\") (Just []) " ]
     compiledObj <- wrapObject symCompiledObj Nothing =<<
         compileExpr env object symCompiledObj Nothing
     -- Do actual update
     compiledUpdate <- return $ AstFunction symUpdateVec " env cont obj (Just [idx]) " [
-       AstValue $ "  vec <- getVar env \"" ++ var ++ "\"",
-       AstValue $ "  result <- updateList vec idx obj >>= updateObject env \"" ++ var ++ "\"",
+       AstValue $ "  vec <- getVar env \"" <> var <> "\"",
+       AstValue $ "  result <- updateList vec idx obj >>= updateObject env \"" <> var <> "\"",
        createAstCont copts "result" ""]
    
-    return $ [entryPt, compiledIdxWrapper, compiledUpdate] ++ compiledIdx ++ compiledObj)
+    return $ [entryPt, compiledIdxWrapper, compiledUpdate] <> compiledIdx <> compiledObj)
 
 compile env ast@(List [Atom "list-set!", nonvar, _, _]) copts = do 
   compileSpecialFormBody env ast copts (\ _ -> do
-    f <- compileSpecialForm "list-set!" ("throwError $ TypeMismatch \"variable\"" ++
-                            " $ String \"" ++ (show nonvar) ++ "\"")  copts
+    f <- compileSpecialForm "list-set!" ("throwError $ TypeMismatch \"variable\"" <>
+                            " $ Text \"" <> T.pack (show nonvar) <> "\"")  copts
     return [f])
 compile env ast@(List (Atom "list-set!" : args)) copts = do
   compileSpecialFormBody env ast copts (\ _ -> do
-    f <- compileSpecialForm "list-set!" ("throwError $ NumArgs 3 $ [String \"" ++ 
-            (show args) ++ "\"]") copts
+    f <- compileSpecialForm "list-set!" ("throwError $ NumArgs 3 $ [Text \"" <> 
+            T.pack (show args) <> "\"]") copts
     return [f])
 
 compile env ast@(List [Atom "vector-set!", Atom var, i, object]) copts = do
@@ -802,26 +807,26 @@ compile env ast@(List [Atom "vector-set!", Atom var, i, object]) copts = do
     compiledIdx <- wrapObject symCompiledIdx (Just symIdxWrapper) =<<
         compileExpr env i symCompiledIdx (Just symIdxWrapper) 
     compiledIdxWrapper <- return $ AstFunction symIdxWrapper " env cont idx _ " [
-       AstValue $ "  " ++ symCompiledObj ++ " env (makeCPSWArgs env cont " ++ symUpdateVec ++ " [idx]) (Nil \"\") (Just []) " ]
+       AstValue $ "  " <> symCompiledObj <> " env (makeCPSWArgs env cont " <> symUpdateVec <> " [idx]) (Nil \"\") (Just []) " ]
     compiledObj <- wrapObject symCompiledObj Nothing =<<
         compileExpr env object symCompiledObj Nothing
     -- Do actual update
     compiledUpdate <- return $ AstFunction symUpdateVec " env cont obj (Just [idx]) " [
-       AstValue $ "  vec <- getVar env \"" ++ var ++ "\"",
-       AstValue $ "  result <- updateVector vec idx obj >>= updateObject env \"" ++ var ++ "\"",
+       AstValue $ "  vec <- getVar env \"" <> var <> "\"",
+       AstValue $ "  result <- updateVector vec idx obj >>= updateObject env \"" <> var <> "\"",
        createAstCont copts "result" ""]
    
-    return $ [entryPt, compiledIdxWrapper, compiledUpdate] ++ compiledIdx ++ compiledObj)
+    return $ [entryPt, compiledIdxWrapper, compiledUpdate] <> compiledIdx <> compiledObj)
 
 compile env ast@(List [Atom "vector-set!", nonvar, _, _]) copts = do 
   compileSpecialFormBody env ast copts (\ _ -> do
-    f <- compileSpecialForm "vector-set!" ("throwError $ TypeMismatch \"variable\"" ++
-                            " $ String \"" ++ (show nonvar) ++ "\"")  copts
+    f <- compileSpecialForm "vector-set!" ("throwError $ TypeMismatch \"variable\"" <>
+                            " $ Text \"" <> T.pack (show nonvar) <> "\"")  copts
     return [f])
 compile env ast@(List (Atom "vector-set!" : args)) copts = do
   compileSpecialFormBody env ast copts (\ _ -> do
-    f <- compileSpecialForm "vector-set!" ("throwError $ NumArgs 3 $ [String \"" ++ 
-            (show args) ++ "\"]") copts
+    f <- compileSpecialForm "vector-set!" ("throwError $ NumArgs 3 $ [Text \"" <> 
+            T.pack (show args) <> "\"]") copts
     return [f])
 
 
@@ -838,26 +843,26 @@ compile env ast@(List [Atom "bytevector-u8-set!", Atom var, i, object]) copts = 
     compiledIdx <- wrapObject symCompiledIdx (Just symIdxWrapper) =<<
         compileExpr env i symCompiledIdx (Just symIdxWrapper) 
     compiledIdxWrapper <- return $ AstFunction symIdxWrapper " env cont idx _ " [
-       AstValue $ "  " ++ symCompiledObj ++ " env (makeCPSWArgs env cont " ++ symUpdateVec ++ " [idx]) (Nil \"\") (Just []) " ]
+       AstValue $ "  " <> symCompiledObj <> " env (makeCPSWArgs env cont " <> symUpdateVec <> " [idx]) (Nil \"\") (Just []) " ]
     compiledObj <- wrapObject symCompiledObj Nothing =<<
         compileExpr env object symCompiledObj Nothing
     -- Do actual update
     compiledUpdate <- return $ AstFunction symUpdateVec " env cont obj (Just [idx]) " [
-       AstValue $ "  vec <- getVar env \"" ++ var ++ "\"",
-       AstValue $ "  result <- updateByteVector vec idx obj >>= updateObject env \"" ++ var ++ "\"",
+       AstValue $ "  vec <- getVar env \"" <> var <> "\"",
+       AstValue $ "  result <- updateByteVector vec idx obj >>= updateObject env \"" <> var <> "\"",
        createAstCont copts "result" ""]
    
-    return $ [entryPt, compiledIdxWrapper, compiledUpdate] ++ compiledIdx ++ compiledObj)
+    return $ [entryPt, compiledIdxWrapper, compiledUpdate] <> compiledIdx <> compiledObj)
 
 compile env ast@(List [Atom "bytevector-u8-set!", nonvar, _, _]) copts = do 
   compileSpecialFormBody env ast copts (\ _ -> do
-    f <- compileSpecialForm "bytevector-u8-set!" ("throwError $ TypeMismatch \"variable\"" ++
-                            " $ String \"" ++ (show nonvar) ++ "\"")  copts
+    f <- compileSpecialForm "bytevector-u8-set!" ("throwError $ TypeMismatch \"variable\"" <>
+                            " $ Text \"" <> T.pack (show nonvar) <> "\"")  copts
     return [f])
 compile env ast@(List (Atom "bytevector-u8-set!" : args)) copts = do
   compileSpecialFormBody env ast copts (\ _ -> do
-    f <- compileSpecialForm "bytevector-u8-set!" ("throwError $ NumArgs 3 $ [String \"" ++ 
-            (show args) ++ "\"]") copts
+    f <- compileSpecialForm "bytevector-u8-set!" ("throwError $ NumArgs 3 $ [Text \"" <> 
+            T.pack (show args) <> "\"]") copts
     return [f])
 
 compile env ast@(List [Atom "hash-table-set!", Atom var, rkey, rvalue]) copts = do
@@ -873,28 +878,28 @@ compile env ast@(List [Atom "hash-table-set!", Atom var, rkey, rvalue]) copts = 
     compiledIdx <- wrapObject symCompiledIdx (Just symIdxWrapper) =<<
        compileExpr env rkey symCompiledIdx (Just symIdxWrapper) 
     compiledIdxWrapper <- return $ AstFunction symIdxWrapper " env cont idx _ " [
-       AstValue $ "  " ++ symCompiledObj ++ " env (makeCPSWArgs env cont " ++ symUpdateVec ++ " [idx]) (Nil \"\") (Just []) " ]
+       AstValue $ "  " <> symCompiledObj <> " env (makeCPSWArgs env cont " <> symUpdateVec <> " [idx]) (Nil \"\") (Just []) " ]
     compiledObj <- wrapObject symCompiledObj Nothing =<<
        compileExpr env rvalue symCompiledObj Nothing
     -- Do actual update
     compiledUpdate <- return $ AstFunction symUpdateVec " env cont obj (Just [rkey]) " [
        -- TODO: this should be more robust, than just assuming ht is a HashTable
-       AstValue $ "  HashTable ht <- getVar env \"" ++ var ++ "\"",
+       AstValue $ "  HashTable ht <- getVar env \"" <> var <> "\"",
        AstValue $ "  HashTable ht' <- recDerefPtrs $ HashTable ht",
-       AstValue $ "  result <- updateObject env \"" ++ var ++ "\" (HashTable $ Data.Map.insert rkey obj ht') ",
+       AstValue $ "  result <- updateObject env \"" <> var <> "\" (HashTable $ Data.Map.insert rkey obj ht') ",
        createAstCont copts "result" ""]
    
-    return $ [entryPt, compiledIdxWrapper, compiledUpdate] ++ compiledIdx ++ compiledObj)
+    return $ [entryPt, compiledIdxWrapper, compiledUpdate] <> compiledIdx <> compiledObj)
 
 compile env ast@(List [Atom "hash-table-set!", nonvar, _, _]) copts = do 
   compileSpecialFormBody env ast copts (\ _ -> do
-    f <- compileSpecialForm "hash-table-set!" ("throwError $ TypeMismatch \"variable\"" ++
-                            " $ String \"" ++ (show nonvar) ++ "\"")  copts
+    f <- compileSpecialForm "hash-table-set!" ("throwError $ TypeMismatch \"variable\"" <>
+                            " $ Text \"" <> T.pack (show nonvar) <> "\"")  copts
     return [f])
 compile env ast@(List (Atom "hash-table-set!" : args)) copts = do
   compileSpecialFormBody env ast copts (\ _ -> do
-    f <- compileSpecialForm "hash-table-set!" ("throwError $ NumArgs 3 $ [String \"" ++ 
-            (show args) ++ "\"]") copts
+    f <- compileSpecialForm "hash-table-set!" ("throwError $ NumArgs 3 $ [Text \"" <> 
+            T.pack (show args) <> "\"]") copts
     return [f])
 
 compile env ast@(List [Atom "hash-table-delete!", Atom var, rkey]) copts = do
@@ -910,27 +915,27 @@ compile env ast@(List [Atom "hash-table-delete!", Atom var, rkey]) copts = do
     -- Do actual update
     compiledUpdate <- return $ AstFunction symDoDelete " env cont rkey _ " [
        -- TODO: this should be more robust, than just assuming ht is a HashTable
-       AstValue $ "  HashTable ht <- getVar env \"" ++ var ++ "\"",
+       AstValue $ "  HashTable ht <- getVar env \"" <> var <> "\"",
        AstValue $ "  HashTable ht' <- recDerefPtrs $ HashTable ht",
-       AstValue $ "  result <- updateObject env \"" ++ var ++ "\" (HashTable $ Data.Map.delete rkey ht') ",
+       AstValue $ "  result <- updateObject env \"" <> var <> "\" (HashTable $ Data.Map.delete rkey ht') ",
        createAstCont copts "result" ""]
    
-    return $ [entryPt, compiledUpdate] ++ compiledIdx)
+    return $ [entryPt, compiledUpdate] <> compiledIdx)
 
 compile env ast@(List [Atom "hash-table-delete!", nonvar, _]) copts = do 
   compileSpecialFormBody env ast copts (\ _ -> do
-    f <- compileSpecialForm "hash-table-delete!" ("throwError $ TypeMismatch \"variable\"" ++
-                            " $ String \"" ++ (show nonvar) ++ "\"")  copts
+    f <- compileSpecialForm "hash-table-delete!" ("throwError $ TypeMismatch \"variable\"" <>
+                            " $ Text \"" <> T.pack (show nonvar) <> "\"")  copts
     return [f])
 compile env ast@(List (Atom "hash-table-delete!" : args)) copts = do
   compileSpecialFormBody env ast copts (\ _ -> do
-    f <- compileSpecialForm "hash-table-delete!" ("throwError $ NumArgs 2 $ [String \"" ++ 
-            (show args) ++ "\"]") copts
+    f <- compileSpecialForm "hash-table-delete!" ("throwError $ NumArgs 2 $ [Text \"" <> 
+            T.pack (show args) <> "\"]") copts
     return [f])
 
 compile env ast@(List (Atom "%import" : args)) copts = do
   compileSpecialFormBody env ast copts (\ _ -> do
-    throwError $ NotImplemented $ "%import, with args: " ++ show args)
+    throwError $ NotImplemented $ "%import, with args: " <> T.pack (show args))
 
 compile env (List [a@(Atom "husk-interpreter?")]) copts = do
     mfunc env (List [a, Bool True]) compile copts 
@@ -942,7 +947,7 @@ compile env args@(List [Atom "load", filename, envSpec]) copts = do
   fname <- LSC.evalLisp env filename
   case fname of
     -- Compile contents of the file
-    String fn -> compileFile fn
+    Text fn -> compileFile fn
 
     -- Unable to get filename at compile time, fall back to loading at runtime
     _ -> mfunc env args compileApply copts
@@ -972,43 +977,43 @@ compile env args@(List [Atom "load", filename, envSpec]) copts = do
   f <- return $ [
     -- TODO: should do runtime error checking if something else
     --       besides a LispEnv is returned
-    AstValue $ "  LispEnv e <- " ++ symEnv ++ " env (makeNullContinuation env) (Nil \"\") (Just []) ",
-    AstValue $ "  result <- " ++ symLoad ++ " e (makeNullContinuation e) (Nil \"\") Nothing",
+    AstValue $ "  LispEnv e <- " <> symEnv <> " env (makeNullContinuation env) (Nil \"\") (Just []) ",
+    AstValue $ "  result <- " <> symLoad <> " e (makeNullContinuation e) (Nil \"\") Nothing",
     createAstCont copts "result" ""]
   -- Join compiled code together
-  return $ [createAstFunc copts f] ++ compEnv ++ compLoad
+  return $ [createAstFunc copts f] <> compEnv <> compLoad
 
 compile env (List [Atom "load", filename]) copts = do -- TODO: allow filename from a var, support env optional arg
  -- TODO: error handling for string below
- String filename' <- LSC.evalLisp env filename
+ Text filename' <- LSC.evalLisp env filename
  Atom symEntryPt <- _gensym "load"
  result <- compileLisp env filename' symEntryPt Nothing
- return $ result ++ 
+ return $ result <> 
    [createAstFunc copts [
-    AstValue $ "  result <- " ++ symEntryPt ++ 
+    AstValue $ "  result <- " <> symEntryPt <> 
                " env (makeNullContinuation env) (Nil \"\") Nothing",
     createAstCont copts "result" ""]]
 
 -- FUTURE: eventually it should be possible to evaluate the args instead of assuming
 -- that they are all strings, but lets keep it simple for now
 compile env (List [Atom "load-ffi", 
-                        String moduleName, 
-                        String externalFuncName, 
-                        String internalFuncName]) copts = do
+                        Text moduleName, 
+                        Text externalFuncName, 
+                        Text internalFuncName]) copts = do
 --  Atom symLoadFFI <- _gensym "loadFFI"
 
   -- Only append module again if it is not already in the list
   List l <- getNamespacedVar env Internal "imports"
-  _ <- if String moduleName `notElem` l
+  _ <- if Text moduleName `notElem` l
           then setNamespacedVar env Internal "imports" $ 
-                                List $ l ++ [String moduleName]
-          else return $ String ""
+                                List $ l <> [Text moduleName]
+          else return $ Text ""
 
   -- Pass along moduleName as another top-level import
   return [createAstFunc copts [
-    AstValue $ "  result <- defineVar env \"" ++ 
-        internalFuncName ++ "\" $ IOFunc " ++ 
-        moduleName ++ "." ++ externalFuncName,
+    AstValue $ "  result <- defineVar env \"" <> 
+        internalFuncName <> "\" $ IOFunc " <> 
+        moduleName <> "." <> externalFuncName,
     createAstCont copts "result" ""]]
 
 compile env args@(List (_ : _)) copts = mfunc env args compileApply copts 
@@ -1057,7 +1062,7 @@ divertVars env expanded copts@(CompileOptions _ uvar uargs nfnc) func = do
 
 -- |Take a list of variables diverted into env at compile time, and
 --  divert them into the env at runtime
-compileDivertedVars :: Monad m => String -> Env m r -> [LispVal m r] -> CompOpts -> IOThrowsError m r HaskAST
+compileDivertedVars :: Monad m => Text -> Env m r -> [LispVal m r] -> CompOpts -> IOThrowsError m r HaskAST
 compileDivertedVars 
   formNext _ vars 
   copts@(CompileOptions _ useVal useArgs _) = do
@@ -1068,24 +1073,24 @@ compileDivertedVars
         True -> "(Just args)"
         _ -> "(Just [])"
       comp (List [Atom renamed, Atom orig]) = do
-        [AstValue $ "  v <- getVar env \"" ++ orig ++ "\"",
-         AstValue $ "  _ <- defineVar env \"" ++ renamed ++ "\" v"]
+        [AstValue $ "  v <- getVar env \"" <> orig <> "\"",
+         AstValue $ "  _ <- defineVar env \"" <> renamed <> "\" v"]
       comp _ = []
       cvars = map comp vars 
-      f = (concat cvars) ++ 
-          [AstValue $ "  " ++ formNext ++ " env cont (" ++ val ++ ") " ++ args]
+      f = (concat cvars) <> 
+          [AstValue $ "  " <> formNext <> " env cont (" <> val <> ") " <> args]
   return $ createAstFunc copts f
 
 -- |Create the function entry point for a special form
-compileSpecialFormEntryPoint :: Monad m => String -> String -> CompOpts -> IOThrowsError m r HaskAST
+compileSpecialFormEntryPoint :: Monad m => Text -> Text -> CompOpts -> IOThrowsError m r HaskAST
 compileSpecialFormEntryPoint formName formSym copts = do
- compileSpecialForm formName ("" ++ formSym ++ " env cont (Nil \"\") (Just [])") copts
+ compileSpecialForm formName ("" <> formSym <> " env cont (Nil \"\") (Just [])") copts
 
 -- | Helper function for compiling a special form
-compileSpecialForm :: Monad m => String -> String -> CompOpts -> IOThrowsError m r HaskAST
+compileSpecialForm :: Monad m => Text -> Text -> CompOpts -> IOThrowsError m r HaskAST
 compileSpecialForm _ formCode copts = do
  f <- return $ [
-       AstValue $ "  " ++ formCode]
+       AstValue $ "  " <> formCode]
  return $ createAstFunc copts f
 
 -- |A wrapper for each special form that allows the form variable 
@@ -1094,7 +1099,7 @@ compileSpecialFormBody :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSeri
                        => Env m r
                        -> LispVal m r
                        -> CompOpts
-                       -> (Maybe String -> IOThrowsError m r [HaskAST])
+                       -> (Maybe Text -> IOThrowsError m r [HaskAST])
                        -> IOThrowsError m r [HaskAST]
 compileSpecialFormBody env 
                        ast@(List (Atom fnc : _)) 
@@ -1108,7 +1113,7 @@ compileSpecialFormBody _ _ _ _ = throwError $ InternalError "compileSpecialFormB
 
 -- | Compile an intermediate expression (such as an arg to if) and 
 --   call into the next continuation with it's value
-compileExpr :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> LispVal m r -> String -> Maybe String -> IOThrowsError m r [HaskAST]
+compileExpr :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> LispVal m r -> Text -> Maybe Text -> IOThrowsError m r [HaskAST]
 compileExpr env expr symThisFunc fForNextExpr = do
   mcompile env expr (CompileOptions symThisFunc False False fForNextExpr) 
 
@@ -1119,7 +1124,7 @@ compileApply env (List (func : fparams)) copts@(CompileOptions coptsThis _ _ cop
 --
 -- TODO: it is probably possible to mix creating conts and not when there are func and non-func args.
 --  
---  _ <- case (trace ("calling compileApply: " ++ show (List (func : fparams))) func) of
+--  _ <- case (trace ("calling compileApply: " <> show (List (func : fparams))) func) of
   _ <- case func of
     List _ -> return $ Nil ""
     Atom _ -> return $ Nil "" 
@@ -1139,7 +1144,7 @@ compileApply env (List (func : fparams)) copts@(CompileOptions coptsThis _ _ cop
         ls
 
        return $ [createAstFunc copts [
-         AstValue $ "  let result = " ++ (ast2Str result),
+         AstValue $ "  let result = " <> (ast2Str result),
          createAstCont copts "result" ""]]
 
      -- Other function with literal args, no need to create a
@@ -1160,19 +1165,19 @@ compileApply env (List (func : fparams)) copts@(CompileOptions coptsThis _ _ cop
        -- Keep track of any variables since we need to do a
        -- 'getRtVar' lookup for each of them prior to apply
        let pack (Atom p : ps) strs vars i = do
-             let varName = 'v' : show i
+             let varName = "v" <> T.pack (show i)
              pack ps 
-                  (strs ++ [varName]) 
-                  (vars ++ [(p, varName)]) 
+                  (strs <> [varName]) 
+                  (vars <> [(p, varName)]) 
                   (i + 1)
            pack (p : ps) strs vars i = 
              pack ps 
-                  (strs ++ [ast2Str p]) 
+                  (strs <> [ast2Str p]) 
                   vars 
                   i
            pack [] strs vars _ = (strs, vars)
        let (paramStrs, vars) = pack args [] [] (0::Int)
-       _compileFuncLitArgs func vars $ "[" ++ joinL paramStrs "," ++ "]"
+       _compileFuncLitArgs func vars $ "[" <> joinL paramStrs "," <> "]"
 
   _compileFuncLitArgs fnc vars args = do
     Atom stubFunc <- _gensym "applyStubF"
@@ -1181,39 +1186,39 @@ compileApply env (List (func : fparams)) copts@(CompileOptions coptsThis _ _ cop
     -- Haskell variables must be used to retrieve each atom from the env
     let varLines = 
           map (\ (rt, cp) -> 
-                  AstValue $ "  " ++ cp ++ " <- getRTVar env \"" ++ rt ++ "\"")
+                  AstValue $ "  " <> cp <> " <- getRTVar env \"" <> rt <> "\"")
               vars
 
     rest <- case coptsNext of
              Nothing -> return $ [
                AstFunction nextFunc
-                " env cont value _ " $ varLines ++ 
-                [AstValue $ "  apply cont value " ++ args]]
+                " env cont value _ " $ varLines <> 
+                [AstValue $ "  apply cont value " <> args]]
              Just fnextExpr -> return $ [
                AstFunction nextFunc 
-                " env cont value _ " $ varLines ++ 
-                [AstValue $ "  apply (makeCPSWArgs env cont " ++ 
-                            fnextExpr ++ " []) value " ++ args]]
+                " env cont value _ " $ varLines <> 
+                [AstValue $ "  apply (makeCPSWArgs env cont " <> 
+                            fnextExpr <> " []) value " <> args]]
 
     _comp <- mcompile env fnc $ CompileOptions stubFunc False False Nothing
     case _comp of
         [(AstValue val)] -> do
           return $ [createAstFunc 
                     (CompileOptions coptsThis False False Nothing) [
-                     AstValue $ "  let var = " ++ val,
-                     AstValue $ "  " ++ nextFunc ++ " env cont var Nothing"]] ++ rest
+                     AstValue $ "  let var = " <> val,
+                     AstValue $ "  " <> nextFunc <> " env cont var Nothing"]] <> rest
         [(AstRef val)] -> do
           return $ [createAstFunc 
                     (CompileOptions coptsThis False False Nothing) [
-                     AstValue $ "  var <- " ++ val,
-                     AstValue $ "  " ++ nextFunc ++ " env cont var Nothing"]] ++ rest
+                     AstValue $ "  var <- " <> val,
+                     AstValue $ "  " <> nextFunc <> " env cont var Nothing"]] <> rest
         _ -> do
           c <- return $ 
             AstFunction coptsThis " env cont _ _ " [
-              AstValue $ "  " ++ stubFunc ++ " env (makeCPSWArgs env cont " ++ 
-                         nextFunc ++ " []) (Nil \"\") (Just [])"]  
+              AstValue $ "  " <> stubFunc <> " env (makeCPSWArgs env cont " <> 
+                         nextFunc <> " []) (Nil \"\") (Just [])"]  
       
-          return $ [c] ++ _comp ++ rest
+          return $ [c] <> _comp <> rest
 
   -- |Compile function and args as a chain of continuations
 -- TODO:
@@ -1221,21 +1226,21 @@ compileApply env (List (func : fparams)) copts@(CompileOptions coptsThis _ _ cop
     rest <- case fparams of
     --rest <- case (trace "fncName" fparams) of
               [] -> do
-                  throwError $ Default $ " unreachable code in compileAllArgs for " ++ fncName
+                  throwError $ Default $ " unreachable code in compileAllArgs for " <> fncName
 --                fnc <- compileInlineVar env fncName "fnc"
 --                return [AstFunction 
 --                          coptsThis
 --                          " env cont (Nil _) (Just (a:as)) "
 --                          [fnc,
---                           AstValue $ "  apply " ++ applyCont ++ " fnc (a:as) "],
+--                           AstValue $ "  apply " <> applyCont <> " fnc (a:as) "],
 --                        AstFunction 
 --                          coptsThis
 --                          " env cont value (Just (a:as)) " 
 --                          [fnc,
---                           AstValue $ "  apply " ++ applyCont ++ " fnc $ (a:as) ++ [value] "]]
+--                           AstValue $ "  apply " <> applyCont <> " fnc $ (a:as) <> [value] "]]
               _ -> compileArgs coptsThis True (Just fncName) fparams -- True, passing fnc as value
     return $ rest
-    --return $ [c, wrapper ] ++ _comp ++ rest
+    --return $ [c, wrapper ] <> _comp <> rest
   compileAllArgs func' = do
     Atom stubFunc <- _gensym "applyStubF"
     Atom wrapperFunc <- _gensym "applyWrapper"
@@ -1244,19 +1249,19 @@ compileApply env (List (func : fparams)) copts@(CompileOptions coptsThis _ _ cop
     -- Use wrapper to pass high-order function (func) as an argument to apply
     wrapper <- return $ 
       AstFunction wrapperFunc " env cont value _ " [
-          AstValue $ "  " ++ nextFunc ++ " env cont " ++ 
+          AstValue $ "  " <> nextFunc <> " env cont " <> 
                      " (Nil \"\") (Just [value]) "]
-    --rest <- case (trace ("func' = " ++ (show func') ++ ", fparams = " ++ (show fparams)) fparams) of
+    --rest <- case (trace ("func' = " <> T.pack (show func') <> ", fparams = " <> T.pack (show fparams)) fparams) of
     rest <- case fparams of
               [] -> do
                 return [AstFunction 
                           nextFunc 
                           " env cont (Nil _) (Just (a:as)) "
-                          [AstValue $ "  apply " ++ applyCont ++ " a as "],
+                          [AstValue $ "  apply " <> applyCont <> " a as "],
                         AstFunction 
                           nextFunc 
                           " env cont value (Just (a:as)) " 
-                          [AstValue $ "  apply " ++ applyCont ++ " a $ as ++ [value] "]]
+                          [AstValue $ "  apply " <> applyCont <> " a $ as <> [value] "]]
               _ -> compileArgs nextFunc False Nothing fparams -- False since no value passed in this time
 
     _comp <- mcompile env func' $ CompileOptions stubFunc False False Nothing
@@ -1264,28 +1269,28 @@ compileApply env (List (func : fparams)) copts@(CompileOptions coptsThis _ _ cop
         [(AstValue val)] -> do
           return $ [createAstFunc 
                     (CompileOptions coptsThis False False Nothing) [
-                     AstValue $ "  let var = " ++ val,
-                     AstValue $ "  " ++ wrapperFunc ++ " env cont var Nothing"]] ++ rest
+                     AstValue $ "  let var = " <> val,
+                     AstValue $ "  " <> wrapperFunc <> " env cont var Nothing"]] <> rest
         [(AstRef val)] -> do
           return $ [createAstFunc 
                     (CompileOptions coptsThis False False Nothing) [
-                     AstValue $ "  var <- " ++ val,
-                     AstValue $ "  " ++ wrapperFunc ++ " env cont var Nothing"]] ++ rest
+                     AstValue $ "  var <- " <> val,
+                     AstValue $ "  " <> wrapperFunc <> " env cont var Nothing"]] <> rest
         _ -> do
           c <- return $ 
             AstFunction coptsThis " env cont _ _ " [
-              AstValue $ "  " ++ stubFunc ++ " env (makeCPSWArgs env cont " ++ 
-                         wrapperFunc ++ " []) (Nil \"\") (Just [])"]  
-          return $ [c, wrapper ] ++ _comp ++ rest
+              AstValue $ "  " <> stubFunc <> " env (makeCPSWArgs env cont " <> 
+                         wrapperFunc <> " []) (Nil \"\") (Just [])"]  
+          return $ [c, wrapper ] <> _comp <> rest
 
-  applyCont :: String
+  applyCont :: Text
   applyCont = case coptsNext of
                 Nothing -> "cont"
-                Just fnextExpr -> "(makeCPSWArgs env cont " ++ fnextExpr ++ " [])"
+                Just fnextExpr -> "(makeCPSWArgs env cont " <> fnextExpr <> " [])"
 
   -- |Compile each argument as its own continuation (lambda), and then
   --  call the function using @applyWrapper@
-  compileArgs :: String -> Bool -> (Maybe String) -> [LispVal m r] -> IOThrowsError m r [HaskAST]
+  compileArgs :: Text -> Bool -> (Maybe Text) -> [LispVal m r] -> IOThrowsError m r [HaskAST]
   compileArgs thisFunc thisFuncUseValue maybeFnc args = do
     case args of
       (a:as) -> do
@@ -1313,39 +1318,39 @@ compileApply env (List (func : fparams)) copts@(CompileOptions coptsThis _ _ cop
                      True -> return [] -- Using apply wrapper, so no more code
                      _ -> compileArgs nextFunc True Nothing asRest -- True indicates nextFunc needs to use value arg passed into it
         let nextCont' = case (lastArg, coptsNext) of
-                            (True, Just fnextExpr) -> "(makeCPSWArgs env cont " ++ fnextExpr ++ " [])"
+                            (True, Just fnextExpr) -> "(makeCPSWArgs env cont " <> fnextExpr <> " [])"
                             _ -> "cont"
         let literalArgs = asts2Str asLiterals
         let argsCode = case thisFuncUseValue of
-                         True -> " $ args ++ [value] ++ " ++ literalArgs ++ ") " 
-                         False -> " $ args ++ " ++ literalArgs ++ ") "
+                         True -> " $ args <> [value] <> " <> literalArgs <> ") " 
+                         False -> " $ args <> " <> literalArgs <> ") "
 
         _comp <- mcompile env a $ CompileOptions stubFunc thisFuncUseValue False Nothing
         case _comp of
             [(AstValue val)] -> do
               c <- do
-                   return [AstValue $ "  let var = " ++ val,
-                           AstValue $ "  " ++ nextFunc ++ " env " ++ nextCont' ++ " var (Just " ++ argsCode]
-              return $ [AstFunction thisFunc fargs (fnc ++ c)] ++ rest
+                   return [AstValue $ "  let var = " <> val,
+                           AstValue $ "  " <> nextFunc <> " env " <> nextCont' <> " var (Just " <> argsCode]
+              return $ [AstFunction thisFunc fargs (fnc <> c)] <> rest
             [(AstRef val)] -> do
               c <- do
-                   return [AstValue $ "  var <- " ++ val,
-                           AstValue $ "  " ++ nextFunc ++ " env " ++ nextCont' ++ " var (Just " ++ argsCode]
-              return $ [AstFunction thisFunc fargs (fnc ++ c)] ++ rest
+                   return [AstValue $ "  var <- " <> val,
+                           AstValue $ "  " <> nextFunc <> " env " <> nextCont' <> " var (Just " <> argsCode]
+              return $ [AstFunction thisFunc fargs (fnc <> c)] <> rest
             _ -> do
               let c = AstValue $
-                        "  continueEval' env (makeCPSWArgs env (makeCPSWArgs env " ++
-                        nextCont' ++ " " ++ nextFunc ++ argsCode ++ stubFunc ++
+                        "  continueEval' env (makeCPSWArgs env (makeCPSWArgs env " <>
+                        nextCont' <> " " <> nextFunc <> argsCode <> stubFunc <>
                         " []) $ Nil\"\""
 -- TODO: not good enough, generated functions assume args come from continuation and not parameter
---              let c = AstValue $ "  " ++ stubFunc ++ " env (makeCPS env " ++ nextCont' ++ " " ++ nextFunc ++ " ) " ++
---                                 " (Nil \"\") (Just " ++ argsCode
-              return $ [AstFunction thisFunc fargs (fnc ++ [c])] ++ _comp ++ rest
+--              let c = AstValue $ "  " <> stubFunc <> " env (makeCPS env " <> nextCont' <> " " <> nextFunc <> " ) " <>
+--                                 " (Nil \"\") (Just " <> argsCode
+              return $ [AstFunction thisFunc fargs (fnc <> [c])] <> _comp <> rest
 
       _ -> throwError $ TypeMismatch "nonempty list" $ List args
 
 compileApply _ err _ = do
-    throwError $ Default $ "compileApply - Unexpected argument: " ++ show err
+    throwError $ Default $ "compileApply - Unexpected argument: " <> T.pack (show err)
 
 -- |Determines if the given lispval is a primitive function
 isPrim :: (ReadRef r m, PtrEq m r) => Env m r -> LispVal m r -> IOThrowsError m r (Maybe (LispVal m r))
@@ -1393,11 +1398,11 @@ collectLiterals args = _collectLiterals args [] False
 --   isLiteral _ = True
 
 -- Compile variable as a stand-alone line of code
-compileInlineVar :: ReadRef r m => Env m r -> String -> String -> IOThrowsError m r HaskAST
+compileInlineVar :: ReadRef r m => Env m r -> Text -> Text -> IOThrowsError m r HaskAST
 compileInlineVar env a hsName = do
  isDefined <- lift $ isRecBound env a
  case isDefined of
-   True -> return $ AstValue $ "  " ++ hsName ++ " <- getRTVar env \"" ++ a ++ "\""
+   True -> return $ AstValue $ "  " <> hsName <> " <- getRTVar env \"" <> a <> "\""
    False -> throwError $ UnboundVar "Variable is not defined" a
 
 -- Helper function to determine if a value/ref was received
@@ -1406,8 +1411,8 @@ isSingleValue [(AstValue _)] = True
 isSingleValue [(AstRef _)] = True
 isSingleValue _ = False
 
-wrapObject :: Monad m => String
-              -> Maybe String -> [HaskAST] -> IOThrowsError m r [HaskAST]
+wrapObject :: Monad m => Text
+              -> Maybe Text -> [HaskAST] -> IOThrowsError m r [HaskAST]
 wrapObject thisF nextF es = do
  case es of
   [val@(AstValue _)] -> compileScalar' val $ CompileOptions thisF False False nextF

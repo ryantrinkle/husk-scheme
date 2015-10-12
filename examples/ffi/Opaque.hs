@@ -25,7 +25,7 @@ import Language.Scheme.Primitives
 import Language.Scheme.Types
 import Language.Scheme.Variables
 
-unpackSet :: LispVal -> ThrowsError (S.Set String)
+unpackSet :: LispVal -> ThrowsError (S.Set Text)
 unpackSet = fromOpaque
 
 primSingleton :: [LispVal] -> ThrowsError LispVal
@@ -39,9 +39,9 @@ primElem badArgs = throwError $ NumArgs (Just 2) badArgs
 primUnion :: [LispVal] -> ThrowsError LispVal
 primUnion = liftM (toOpaque . S.unions) . mapM unpackSet
 
-setBindings :: [(String, LispVal)]
+setBindings :: [(Text, LispVal)]
 setBindings = [
-        ("nullSet", toOpaque (S.empty :: S.Set String)),
+        ("nullSet", toOpaque (S.empty :: S.Set Text)),
         ("singleton", PrimitiveFunc primSingleton),
         ("elem", PrimitiveFunc primElem),
         ("union", PrimitiveFunc primUnion)

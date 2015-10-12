@@ -1,5 +1,7 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE OverloadedStrings #-}
+
 {- |
 Module      : Language.Scheme.Parser
 Copyright   : Justin Ethier
@@ -55,13 +57,16 @@ import qualified Data.Map
 import Data.Ratio
 import Data.Word
 import Numeric
-import Text.ParserCombinators.Parsec hiding (spaces)
+import Text.Parsec hiding (Parser, spaces)
+import Text.Parsec.Text
 import Text.Parsec.Language
 import qualified Text.Parsec.Token as P
 #if __GLASGOW_HASKELL__ >= 702
 import Data.Functor.Identity (Identity)
 import Text.Parsec.Prim (ParsecT)
 #endif
+import Data.Text (Text)
+import qualified Data.Text as T
 
 -- This was added by pull request #63 as part of a series of fixes
 -- to get husk to build on ghc 7.2.2
@@ -72,51 +77,54 @@ import Text.Parsec.Prim (ParsecT)
 --import Data.Functor.Identity (Identity)
 
 -- |Language definition for Scheme
-lispDef :: LanguageDef ()
+lispDef :: GenLanguageDef Text () Identity
 lispDef 
-  = emptyDef    
+  = P.LanguageDef
   { P.commentStart   = "#|"
   , P.commentEnd     = "|#"
   , P.commentLine    = ";"
   , P.nestedComments = True
   , P.identStart     = letter <|> symbol
   , P.identLetter    = letter <|> digit <|> symbol
+  , P.opStart        = oneOf ":!#$%&*+./<=>?@\\^|-~"
+  , P.opLetter       = oneOf ":!#$%&*+./<=>?@\\^|-~"
+  , P.reservedOpNames = []
   , P.reservedNames  = []
   , P.caseSensitive  = True
   } 
 
 #if __GLASGOW_HASKELL__ >= 702
-lexer :: P.GenTokenParser String () Data.Functor.Identity.Identity
+lexer :: P.GenTokenParser Text () Data.Functor.Identity.Identity
 #endif
 lexer = P.makeTokenParser lispDef
 
 #if __GLASGOW_HASKELL__ >= 702
-dot :: ParsecT String () Identity String
+dot :: ParsecT Text () Identity Text
 #endif
-dot = P.dot lexer
+dot = liftM T.pack $ P.dot lexer
 
 #if __GLASGOW_HASKELL__ >= 702
-parens :: ParsecT String () Identity a -> ParsecT String () Identity a
+parens :: ParsecT Text () Identity a -> ParsecT Text () Identity a
 #endif
 parens = P.parens lexer
 
 #if __GLASGOW_HASKELL__ >= 702
-brackets :: ParsecT String () Identity a -> ParsecT String () Identity a
+brackets :: ParsecT Text () Identity a -> ParsecT Text () Identity a
 #endif
 brackets = P.brackets lexer
 
 #if __GLASGOW_HASKELL__ >= 702
-identifier :: ParsecT String () Identity String
+identifier :: ParsecT Text () Identity Text
 #endif
-identifier = P.identifier lexer
+identifier = liftM T.pack $ P.identifier lexer
 
 #if __GLASGOW_HASKELL__ >= 702
-whiteSpace :: ParsecT String () Identity ()
+whiteSpace :: ParsecT Text () Identity ()
 #endif
 whiteSpace = P.whiteSpace lexer
 
 #if __GLASGOW_HASKELL__ >= 702
-lexeme :: ParsecT String () Identity a -> ParsecT String () Identity a
+lexeme :: ParsecT Text () Identity a -> ParsecT Text () Identity a
 #endif
 lexeme = P.lexeme lexer
 
@@ -129,7 +137,7 @@ parseAtom :: Parser (LispVal m r)
 parseAtom = do
   atom <- identifier
   if atom == "."
-     then pzero -- Do not match this form
+     then parserZero -- Do not match this form
      else return $ Atom atom
 
 -- |Parse a boolean
@@ -147,8 +155,7 @@ parseChar = do
   _ <- try (string "#\\")
   c <- anyChar
   r <- many (letter <|> digit)
-  let pchr = c : r
-  case pchr of
+  case c : r of
     "space"     -> return $ Char ' '
     "newline"   -> return $ Char '\n'
     "alarm"     -> return $ Char '\a' 
@@ -158,12 +165,11 @@ parseChar = do
     "null"      -> return $ Char '\0' 
     "return"    -> return $ Char '\n' 
     "tab"       -> return $ Char '\t'
-    _ -> case (c : r) of
-        [ch] -> return $ Char ch
-        ('x' : hexs) -> do
-            rv <- parseHexScalar hexs
-            return $ Char rv
-        _ -> pzero
+    [ch] -> return $ Char ch
+    'x' : hexs -> do
+        rv <- parseHexScalar hexs
+        return $ Char rv
+    _ -> parserZero
 
 -- |Parse an integer in octal notation, base 8
 parseOctalNumber :: Parser (LispVal m r)
@@ -174,7 +180,7 @@ parseOctalNumber = do
   case (length sign) of
      0 -> return $ Number $ fst $ head (Numeric.readOct num)
      1 -> return $ Number $ fromInteger $ (*) (-1) $ fst $ head (Numeric.readOct num)
-     _ -> pzero
+     _ -> parserZero
 
 -- |Parse an integer in binary notation, base 2
 parseBinaryNumber :: Parser (LispVal m r)
@@ -183,9 +189,9 @@ parseBinaryNumber = do
   sign <- many (oneOf "-")
   num <- many1 (oneOf "01")
   case (length sign) of
-     0 -> return $ Number $ fst $ head (Numeric.readInt 2 (`elem` "01") DC.digitToInt num)
-     1 -> return $ Number $ fromInteger $ (*) (-1) $ fst $ head (Numeric.readInt 2 (`elem` "01") DC.digitToInt num)
-     _ -> pzero
+     0 -> return $ Number $ fst $ head (Numeric.readInt 2 (`elem` ("01" :: String)) DC.digitToInt num)
+     1 -> return $ Number $ fromInteger $ (*) (-1) $ fst $ head (Numeric.readInt 2 (`elem` ("01" :: String)) DC.digitToInt num)
+     _ -> parserZero
 
 -- |Parse an integer in hexadecimal notation, base 16
 parseHexNumber :: Parser (LispVal m r)
@@ -196,7 +202,7 @@ parseHexNumber = do
   case (length sign) of
      0 -> return $ Number $ fst $ head (Numeric.readHex num)
      1 -> return $ Number $ fromInteger $ (*) (-1) $ fst $ head (Numeric.readHex num)
-     _ -> pzero
+     _ -> parserZero
 
 -- |Parser for Integer, base 10
 parseDecimalNumber :: Parser (LispVal m r)
@@ -205,7 +211,7 @@ parseDecimalNumber = do
   sign <- many (oneOf "-")
   num <- many1 digit
   if (length sign) > 1
-     then pzero
+     then parserZero
      else return $ (Number . read) $ sign ++ num
 
 -- |Parser for a base 10 Integer that will also
@@ -242,7 +248,7 @@ parseRealNumber = do
      1 -> if sign == "-" 
              then return $ Float $ (*) (-1.0) $ fst $ head (Numeric.readFloat dec)
              else return $ Float $ fst $ head (Numeric.readFloat dec)
-     _ -> pzero
+     _ -> parserZero
   parseNumberExponent f
 
 -- | Parse the exponent section of a floating point number
@@ -256,12 +262,12 @@ parseNumberExponent n = do
       num <- try parseDecimalNumber
       case num of
         Number nexp -> buildResult n nexp
-        _ -> pzero
-    _ -> pzero
+        _ -> parserZero
+    _ -> parserZero
  where 
   buildResult (Number num) nexp = return $ Float $ (fromIntegral num) * (10 ** (fromIntegral nexp))
   buildResult (Float num) nexp = return $ Float $ num * (10 ** (fromIntegral nexp))
-  buildResult _ _ = pzero
+  buildResult _ _ = parserZero
 
 -- |Parse a rational number
 parseRationalNumber :: Parser (LispVal m r)
@@ -273,13 +279,13 @@ parseRationalNumber = do
       sign <- many (oneOf "-")
       num <- many1 digit
       if (length sign) > 1
-         then pzero
+         then parserZero
          else do
              let pdenominator = read $ sign ++ num
              if pdenominator == 0
                 then return $ Number 0 -- TODO: Prevents a div-by-zero error, but not really correct either
                 else return $ Rational $ n % pdenominator
-    _ -> pzero
+    _ -> parserZero
 
 -- |Parse a complex number
 parseComplexNumber :: Parser (LispVal m r)
@@ -302,7 +308,7 @@ parseComplexNumber = do
 
 -- |Parse an escaped character
 parseEscapedChar :: forall st .
-                    GenParser Char st Char
+                    GenParser st Char
 parseEscapedChar = do
   _ <- char '\\'
   c <- anyChar
@@ -332,7 +338,7 @@ parseString = do
   _ <- char '"'
   x <- many (parseEscapedChar <|> noneOf "\"")
   _ <- char '"'
-  return $ String x
+  return $ Text $ T.pack x
 
 -- |Parse a vector
 parseVector :: Parser (LispVal m r)
@@ -367,7 +373,7 @@ parseHashTable = do
   let mvals = f [] vals
   case mvals of
     Just m -> return $ HashTable $ Data.Map.fromList m
-    Nothing -> pzero
+    Nothing -> parserZero
 
 -- |Parse a list
 parseList :: Parser (LispVal m r)
@@ -379,7 +385,7 @@ parseDottedList :: Parser (LispVal m r)
 parseDottedList = do
   phead <- endBy parseExpr whiteSpace
   case phead of
-    [] -> pzero -- car is required; no match   
+    [] -> parserZero -- car is required; no match   
     _ -> do
       ptail <- dot >> parseExpr
       case ptail of
@@ -483,16 +489,16 @@ mainParser = do
 
 -- |Use a parser to parse the given text, throwing an error
 --  if there is a problem parsing the text.
-readOrThrow :: Parser a -> String -> ThrowsError m r a
+readOrThrow :: Parser a -> Text -> ThrowsError m r a
 readOrThrow parser input = case parse parser "lisp" input of
   Left err -> throwError $ Parser err
   Right val -> return val
 
 -- |Parse an expression from a string of text
-readExpr :: String -> ThrowsError m r (LispVal m r)
+readExpr :: Text -> ThrowsError m r (LispVal m r)
 readExpr = readOrThrow mainParser
 
 -- |Parse many expressions from a string of text
-readExprList :: String -> ThrowsError m r [LispVal m r]
+readExprList :: Text -> ThrowsError m r [LispVal m r]
 readExprList = readOrThrow (endBy mainParser whiteSpace)
 

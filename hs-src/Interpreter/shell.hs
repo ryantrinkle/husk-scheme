@@ -50,7 +50,7 @@ main = do
 
 data Options = Options {
     optInter :: Bool,
-    optSchemeRev :: String -- RxRS version
+    optSchemeRev :: Text -- RxRS version
     }
 
 -- |Default values for the command line options
@@ -94,28 +94,28 @@ showHelp _ = do
 -- REPL Section
 --
 
-flushStr :: String -> IO ()
+flushStr :: Text -> IO ()
 flushStr str = putStr str >> hFlush stdout
 
-getRuntimeEnv :: String -> IO (Env IO IORef)
+getRuntimeEnv :: Text -> IO (Env IO IORef)
 getRuntimeEnv "7" = LSC.r7rsEnv
 getRuntimeEnv _ = LSC.r5rsEnv
 
 -- |Execute a single scheme file from the command line
-runOne :: IO (Env IO IORef) -> [String] -> Bool -> IO ()
+runOne :: IO (Env IO IORef) -> [Text] -> Bool -> IO ()
 runOne initEnv args interactive = do
   env <- initEnv >>= flip LSV.extendEnv
                           [((Var, "args"),
-                           List $ map String $ drop 1 args)]
+                           List $ map Text $ drop 1 args)]
 
   result <- (LSC.runIOThrows $ liftM show $ 
-             LSC.evalLisp env (List [Atom "load", String (head args)]))
+             LSC.evalLisp env (List [Atom "load", Text (head args)]))
   _ <- case result of
     Just errMsg -> putStrLn errMsg
     _  -> do 
       -- Call into (main) if it exists...
       alreadyDefined <- liftIO $ LSV.isBound env "main"
-      let argv = List $ map String args
+      let argv = List $ map Text args
       when alreadyDefined (do 
         mainResult <- (LSC.runIOThrows $ liftM show $ 
                        LSC.evalLisp env (List [Atom "main", List [Atom "quote", argv]]))
@@ -168,8 +168,8 @@ runRepl env' = do
           cOpen > cClose
 
 -- |Auto-complete using scheme symbols
-completeScheme :: Env IO IORef -> (String, String) 
-               -> IO (String, [HLC.Completion])
+completeScheme :: Env IO IORef -> (Text, Text) 
+               -> IO (Text, [HLC.Completion])
 -- Right after a ')' it seems more useful to autocomplete next closed parenthesis
 completeScheme _ (lnL@(')':_), _) = do
   let cOpen  = LSU.countLetters '(' lnL

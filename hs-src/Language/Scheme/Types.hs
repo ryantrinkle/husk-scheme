@@ -6,6 +6,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE OverloadedStrings #-}
 {- |
 Module      : Language.Scheme.Types
 Copyright   : Justin Ethier
@@ -42,7 +43,7 @@ module Language.Scheme.Types
         , Float
         , Complex
         , Rational
-        , String
+        , Text
         , Char
         , Bool
         , PrimitiveFunc
@@ -121,6 +122,9 @@ import Data.Map (Map)
 import Data.Ratio
 import System.IO
 import Text.ParserCombinators.Parsec hiding (spaces)
+import Data.Text (Text)
+import qualified Data.Text as T
+import Data.Monoid
 
 -- Environment management
 
@@ -138,11 +142,11 @@ data Namespace
 -- |A Scheme environment containing variable bindings of form @(namespaceName, variableName), variableValue@
 data Env m r = Environment {
         parentEnv :: Maybe (Env m r),
-        bindings :: r (Map Namespace (Map String (r (LispVal m r)))),
-        pointers :: r (Map Namespace (Map String (r [LispVal m r])))
+        bindings :: r (Map Namespace (Map Text (r (LispVal m r)))),
+        pointers :: r (Map Namespace (Map Text (r [LispVal m r])))
     }
 
-type PtrEq m r = (Eq (r (Map Namespace (Map String (r (LispVal m r))))), Eq (r (Map Namespace (Map String (r [LispVal m r])))))
+type PtrEq m r = (Eq (r (Map Namespace (Map Text (r (LispVal m r))))), Eq (r (Map Namespace (Map Text (r [LispVal m r])))))
 
 instance PtrEq m r => Eq (Env m r) where
     (Environment _ xb xpts) == (Environment _ yb ypts) = 
@@ -184,48 +188,48 @@ nullEnv = do
 
 -- |Types of errors that may occur when evaluating Scheme code
 data LispError m r = NumArgs (Maybe Integer) [LispVal m r] -- ^Invalid number of function arguments
-  | TypeMismatch String (LispVal m r) -- ^Type error
+  | TypeMismatch Text (LispVal m r) -- ^Type error
   | Parser ParseError -- ^Parsing error
-  | BadSpecialForm String (LispVal m r) -- ^Invalid special (built-in) form
-  | UnboundVar String String -- ^ A referenced variable has not been declared
+  | BadSpecialForm Text (LispVal m r) -- ^Invalid special (built-in) form
+  | UnboundVar Text Text -- ^ A referenced variable has not been declared
   | DivideByZero -- ^Divide by Zero error
-  | NotImplemented String -- ^ Feature is not implemented
-  | InternalError String {- ^An internal error within husk; in theory user (Scheme) code
+  | NotImplemented Text -- ^ Feature is not implemented
+  | InternalError Text {- ^An internal error within husk; in theory user (Scheme) code
                          should never allow one of these errors to be triggered. -}
-  | Default String -- ^Default error
+  | Default Text -- ^Default error
   | ErrorWithCallHist (LispError m r) [LispVal m r] -- ^Wraps an error to also include the current call history
 
 -- |Create a textual description for a 'LispError'
-showError :: LispError m r -> String
-showError (NumArgs (Just expected) found) = "Expected " ++ show expected
-                                  ++ " args but found " 
-                                  ++ (show $ length found)
-                                  ++ " values: " ++ unwordsList found
+showError :: LispError m r -> Text
+showError (NumArgs (Just expected) found) = "Expected " <> (T.pack . show) expected
+                                  <> " args but found " 
+                                  <> ((T.pack . show) $ length found)
+                                  <> " values: " <> unwordsList found
 showError (NumArgs Nothing found) = "Incorrect number of args, "
-                                    ++ " found "
-                                    ++ (show $ length found)
-                                    ++ " values: " ++ unwordsList found
-showError (TypeMismatch expected found) = "Invalid type: expected " ++ expected
-                                  ++ ", found " ++ show found
-showError (Parser parseErr) = "Parse error at " ++ ": " ++ show parseErr
-showError (BadSpecialForm message form) = message ++ ": " ++ show form
-showError (UnboundVar message varname) = message ++ ": " ++ varname
+                                    <> " found "
+                                    <> ((T.pack . show) $ length found)
+                                    <> " values: " <> unwordsList found
+showError (TypeMismatch expected found) = "Invalid type: expected " <> expected
+                                  <> ", found " <> (T.pack . show) found
+showError (Parser parseErr) = "Parse error at " <> ": " <> (T.pack . show) parseErr
+showError (BadSpecialForm message form) = message <> ": " <> (T.pack . show) form
+showError (UnboundVar message varname) = message <> ": " <> varname
 showError (DivideByZero) = "Division by zero"
-showError (NotImplemented message) = "Not implemented: " ++ message
-showError (InternalError message) = "An internal error occurred: " ++ message
-showError (Default message) = "Error: " ++ message
-showError (ErrorWithCallHist err stack) = showCallHistory (show err) stack
+showError (NotImplemented message) = "Not implemented: " <> message
+showError (InternalError message) = "An internal error occurred: " <> message
+showError (Default message) = "Error: " <> message
+showError (ErrorWithCallHist err stack) = showCallHistory ((T.pack . show) err) stack
 
-instance Show (LispError m r) where show = showError
+instance Show (LispError m r) where show = T.unpack . showError
 
 -- |Display call history for an error
-showCallHistory :: String -> [LispVal m r] -> String
+showCallHistory :: Text -> [LispVal m r] -> Text
 showCallHistory message hist = do
   let nums :: [Int]
       nums = [0..]
       ns = take (length hist) nums
-  message ++ "\n\nCall History:\n" ++ 
-    (unlines $ map (\(n, s) -> ('#' : show n) ++ ": " ++ show s) 
+  message <> "\n\nCall History:\n" <> 
+    (T.unlines $ map (\(n, s) -> ("#" <> (T.pack . show) n) <> ": " <> (T.pack . show) s) 
                    (zip ns $ reverse hist))
 
 -- |Container used by operations that could throw an error
@@ -242,7 +246,7 @@ liftThrows (Right val) = return val
 -- type LispVal = LispVal IORef
 
 -- |Scheme data types
-data LispVal m r = Atom String
+data LispVal m r = Atom Text
  -- ^Symbol
  | List [LispVal m r]
  -- ^List
@@ -270,22 +274,22 @@ data LispVal m r = Atom String
  -- ^Complex number
  | Rational Rational
  -- ^Rational number
- | String String
- -- ^String
+ | Text Text
+ -- ^Text
  | Char Char
  -- ^Character
  | Bool Bool
  -- ^Boolean
  | PrimitiveFunc ([LispVal m r] -> ThrowsError m r (LispVal m r))
  -- ^Primitive function
- | Func {params :: [String],
-         vararg :: (Maybe String),
+ | Func {params :: [Text],
+         vararg :: (Maybe Text),
          body :: [LispVal m r],
          closure :: Env m r
         }
  -- ^Function written in Scheme
- | HFunc {hparams :: [String],
-          hvararg :: (Maybe String),
+ | HFunc {hparams :: [Text],
+          hvararg :: (Maybe Text),
           hbody :: (Env m r -> (LispVal m r) -> (LispVal m r) -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)),
           hclosure :: Env m r
         }
@@ -299,7 +303,7 @@ data LispVal m r = Atom String
  -- ^A custom function written by code outside of husk.
  --  Any code that uses the Haskell API should define custom
  --  functions using this data type.
- | Pointer { pointerVar :: String
+ | Pointer { pointerVar :: Text
             ,pointerEnv :: Env m r } 
  -- ^Pointer to an environment variable.
  | Opaque Dynamic
@@ -317,7 +321,7 @@ data LispVal m r = Atom String
           , synRenameClosure :: Maybe (Env m r) -- ^ Renames (from macro hygiene) in effect at def time;
                                                   --   only applicable if this macro defined inside another macro.
           , synDefinedInMacro :: Bool             -- ^ Set if macro is defined within another macro
-          , synEllipsis :: String                 -- ^ String to use as the ellipsis identifier
+          , synEllipsis :: Text                 -- ^ Text to use as the ellipsis identifier
           , synIdentifiers :: [LispVal m r]           -- ^ Literal identifiers from syntax-rules 
           , synRules :: [LispVal m r]                 -- ^ Rules from syntax-rules
    } -- ^ Type to hold a syntax object that is created by a macro definition.
@@ -333,7 +337,7 @@ data LispVal m r = Atom String
    -- ^ Wrapper for a scheme environment
  | EOF
    -- ^ End of file indicator
- | Nil String
+ | Nil Text
  -- ^Internal use only; do not use this type directly.
 
 -- | Scheme /null/ value
@@ -348,11 +352,11 @@ toOpaque = Opaque . toDyn
 --  type, or produce a TypeMismatch error.
 fromOpaque :: forall a m r. Typeable a => LispVal m r -> ThrowsError m r a
 -- fromOpaque (Opaque o) | isJust $ fromDynamic o = fromJust $ fromDynamic o
--- fromOpaque badArg = throwError $ TypeMismatch (show $ toOpaque (undefined :: a)) badArg
+-- fromOpaque badArg = throwError $ TypeMismatch ((T.pack . show) $ toOpaque (undefined :: a)) badArg
 
 -- Old version that used ViewPatterns
 fromOpaque (Opaque (fromDynamic -> Just v)) = return v
-fromOpaque badArg = throwError $ TypeMismatch (show $ toOpaque (undefined :: a)) badArg
+fromOpaque badArg = throwError $ TypeMismatch ((T.pack . show) $ toOpaque (undefined :: a)) badArg
 
 -- |Container to hold code that is passed to a continuation for deferred execution
 data DeferredCode m r =
@@ -368,10 +372,10 @@ data DynamicWinders m r = DynamicWinders {
   , after :: LispVal m r -- ^Function to execute when leaving extent of dynamic-wind
 }
 
-showDWVal :: DynamicWinders m r -> String
-showDWVal (DynamicWinders b a) = "(" ++ (show b) ++ " . " ++ (show a) ++ ")"
+showDWVal :: DynamicWinders m r -> Text
+showDWVal (DynamicWinders b a) = "(" <> ((T.pack . show) b) <> " . " <> ((T.pack . show) a) <> ")"
 
-instance Show (DynamicWinders m r) where show = showDWVal
+instance Show (DynamicWinders m r) where show = T.unpack . showDWVal
 
 -- |Make an /empty/ continuation that does not contain any code
 makeNullContinuation :: Env m r -> LispVal m r
@@ -417,7 +421,7 @@ instance Ord (LispVal m r) where
   compare (Number a) (Number b) = compare a b
   compare (Rational a) (Rational b) = compare a b
   compare (Float a) (Float b) = compare a b
-  compare (String a) (String b) = compare a b
+  compare (Text a) (Text b) = compare a b
   compare (Char a) (Char b) = compare a b
   compare (Atom a) (Atom b) = compare a b
 {- compare (DottedList xs x) (DottedList xs x) = compare a b
@@ -426,7 +430,7 @@ HashTable
 List
 Func
 Others? -}
-  compare a b = compare (show a) (show b) -- Hack (??): sort alphabetically when types differ or have no handlers
+  compare a b = compare ((T.pack . show) a) ((T.pack . show) b) -- Hack (??): sort alphabetically when types differ or have no handlers
 
 -- |Compare two 'LispVal instances
 eqv :: [LispVal m r] 
@@ -438,10 +442,10 @@ eqv [(Number arg1), (Number arg2)] = return $ Bool $ arg1 == arg2
 eqv [(Complex arg1), (Complex arg2)] = return $ Bool $ arg1 == arg2
 eqv [(Rational arg1), (Rational arg2)] = return $ Bool $ arg1 == arg2
 eqv [(Float arg1), (Float arg2)] = return $ Bool $ arg1 == arg2
-eqv [(String arg1), (String arg2)] = return $ Bool $ arg1 == arg2
+eqv [(Text arg1), (Text arg2)] = return $ Bool $ arg1 == arg2
 eqv [(Char arg1), (Char arg2)] = return $ Bool $ arg1 == arg2
 eqv [(Atom arg1), (Atom arg2)] = return $ Bool $ arg1 == arg2
-eqv [(DottedList xs x), (DottedList ys y)] = eqv [List $ xs ++ [x], List $ ys ++ [y]]
+eqv [(DottedList xs x), (DottedList ys y)] = eqv [List $ xs <> [x], List $ ys <> [y]]
 eqv [(Vector arg1), (Vector arg2)] = eqv [List (elems arg1), List (elems arg2)]
 eqv [(ByteVector a), (ByteVector b)] = return $ Bool $ a == b
 eqv [(HashTable arg1), (HashTable arg2)] =
@@ -458,18 +462,18 @@ eqv [(HashTable arg1), (HashTable arg2)] =
 -- assign memory locations to data. Then we can just compare memory locations
 -- in cases such as this one. But that is a much larger change.
 eqv [x@(Func _ _ xBody _), y@(Func _ _ yBody _)] = do
-  if (show x) /= (show y)
+  if ((T.pack . show) x) /= ((T.pack . show) y)
      then return $ Bool False
      else eqvList eqv [List xBody, List yBody] 
 eqv [x@(HFunc{}), y@(HFunc{})] = do
-  if (show x) /= (show y)
+  if ((T.pack . show) x) /= ((T.pack . show) y)
      then return $ Bool False
      else return $ Bool True
 --
-eqv [x@(PrimitiveFunc _), y@(PrimitiveFunc _)] = return $ Bool $ (show x) == (show y)
-eqv [x@(IOFunc _), y@(IOFunc _)] = return $ Bool $ (show x) == (show y)
-eqv [x@(CustFunc _), y@(CustFunc _)] = return $ Bool $ (show x) == (show y)
-eqv [x@(EvalFunc _), y@(EvalFunc _)] = return $ Bool $ (show x) == (show y)
+eqv [x@(PrimitiveFunc _), y@(PrimitiveFunc _)] = return $ Bool $ ((T.pack . show) x) == ((T.pack . show) y)
+eqv [x@(IOFunc _), y@(IOFunc _)] = return $ Bool $ ((T.pack . show) x) == ((T.pack . show) y)
+eqv [x@(CustFunc _), y@(CustFunc _)] = return $ Bool $ ((T.pack . show) x) == ((T.pack . show) y)
+eqv [x@(EvalFunc _), y@(EvalFunc _)] = return $ Bool $ ((T.pack . show) x) == ((T.pack . show) y)
 -- FUTURE: comparison of two continuations
 eqv [l1@(List _), l2@(List _)] = eqvList eqv [l1, l2]
 eqv [_, _] = return $ Bool False
@@ -499,55 +503,55 @@ instance Eq (LispVal m r) where
   x == y = eqVal x y
 
 -- |Create a textual description of a 'LispVal
-showVal :: LispVal m r -> String
+showVal :: LispVal m r -> Text
 showVal (Nil _) = ""
 showVal (EOF) = "#!EOF"
 showVal (LispEnv _) = "<env>"
-showVal (String contents) = "\"" ++ contents ++ "\""
-showVal (Char chr) = [chr]
+showVal (Text contents) = "\"" <> contents <> "\""
+showVal (Char chr) = T.singleton chr
 showVal (Atom name) = name
-showVal (Number contents) = show contents
-showVal (Complex contents) = show (realPart contents) ++ "+" ++ (show $ imagPart contents) ++ "i"
-showVal (Rational contents) = (show (numerator contents)) ++ "/" ++ (show (denominator contents))
-showVal (Float contents) = show contents
+showVal (Number contents) = (T.pack . show) contents
+showVal (Complex contents) = (T.pack . show) (realPart contents) <> "+" <> ((T.pack . show) $ imagPart contents) <> "i"
+showVal (Rational contents) = ((T.pack . show) (numerator contents)) <> "/" <> ((T.pack . show) (denominator contents))
+showVal (Float contents) = (T.pack . show) contents
 showVal (Bool True) = "#t"
 showVal (Bool False) = "#f"
-showVal (Vector contents) = "#(" ++ unwordsList (Data.Array.elems contents) ++ ")"
-showVal (ByteVector contents) = "#u8(" ++ unwords (map show (BS.unpack contents)) ++ ")"
+showVal (Vector contents) = "#(" <> unwordsList (Data.Array.elems contents) <> ")"
+showVal (ByteVector contents) = "#u8(" <> T.unwords (map (T.pack . show) (BS.unpack contents)) <> ")"
 showVal (HashTable _) = "<hash-table>"
-showVal (List contents) = "(" ++ unwordsList contents ++ ")"
-showVal (DottedList h t) = "(" ++ unwordsList h ++ " . " ++ showVal t ++ ")"
+showVal (List contents) = "(" <> unwordsList contents <> ")"
+showVal (DottedList h t) = "(" <> unwordsList h <> " . " <> showVal t <> ")"
 showVal (PrimitiveFunc _) = "<primitive>"
 showVal (Continuation {}) = "<continuation>"
 showVal (Syntax {}) = "<syntax>"
 showVal (SyntaxExplicitRenaming _) = "<er-macro-transformer syntax>"
 showVal (Func {params = args, vararg = varargs, body = _, closure = _}) =
-  "(lambda (" ++ unwords args ++
+  "(lambda (" <> T.unwords args <>
     (case varargs of
       Nothing -> ""
-      Just arg -> " . " ++ arg) ++ ") ...)"
+      Just arg -> " . " <> arg) <> ") ...)"
 showVal (HFunc {hparams = args, hvararg = varargs, hbody = _, hclosure = _}) =
-  "(lambda (" ++ unwords args ++
+  "(lambda (" <> T.unwords args <>
     (case varargs of
       Nothing -> ""
-      Just arg -> " . " ++ arg) ++ ") ...)"
+      Just arg -> " . " <> arg) <> ") ...)"
 showVal (Port _ _) = "<IO port>"
 showVal (IOFunc _) = "<IO primitive>"
 showVal (CustFunc _) = "<custom primitive>"
 showVal (EvalFunc _) = "<procedure>"
-showVal (Pointer p _) = "<ptr " ++ p ++ ">"
-showVal (Opaque d) = "<Haskell " ++ show (dynTypeRep d) ++ ">"
+showVal (Pointer p _) = "<ptr " <> p <> ">"
+showVal (Opaque d) = "<Haskell " <> (T.pack . show) (dynTypeRep d) <> ">"
 
 -- |A helper function to make pointer deref code more concise
 box :: Monad m => LispVal m r -> IOThrowsError m r [LispVal m r]
 box a = return [a]
 
 -- |Convert a list of Lisp objects into a space-separated string
-unwordsList :: [LispVal m r] -> String
-unwordsList = unwords . map showVal
+unwordsList :: [LispVal m r] -> Text
+unwordsList = T.unwords . map showVal
 
 -- |Allow conversion of lispval instances to strings
-instance Show (LispVal m r) where show = showVal
+instance Show (LispVal m r) where show = T.unpack . showVal
 
 
 -- Functions required by the interpreter --
@@ -555,7 +559,7 @@ instance Show (LispVal m r) where show = showVal
 -- |Create a scheme function
 makeFunc :: -- forall (m :: * -> *).
             (Monad m) =>
-            Maybe String -> Env m r -> [LispVal m r] -> [LispVal m r] -> m (LispVal m r)
+            Maybe Text -> Env m r -> [LispVal m r] -> [LispVal m r] -> m (LispVal m r)
 makeFunc varargs env fparams fbody = return $ Func (map showVal fparams) varargs fbody env
 
 -- |Create a normal scheme function
@@ -577,17 +581,17 @@ makeVarargs = makeFunc . Just . showVal
 -- |Create a haskell function
 makeHFunc ::
             (Monad m) =>
-            Maybe String 
+            Maybe Text 
          -> Env m r 
-         -> [String] 
+         -> [Text] 
          -> (Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)) 
---         -> String 
+--         -> Text 
          -> m (LispVal m r)
 makeHFunc varargs env fparams fbody = return $ HFunc fparams varargs fbody env --(map showVal fparams) varargs fbody env
 -- |Create a normal haskell function
 makeNormalHFunc :: (Monad m) =>
                   Env m r
-               -> [String]
+               -> [Text]
                -> (Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r))
                -> m (LispVal m r)
 makeNormalHFunc = makeHFunc Nothing
@@ -595,7 +599,7 @@ makeNormalHFunc = makeHFunc Nothing
 -- |Create a haskell function that can receive any number of arguments
 makeHVarargs :: (Monad m) => LispVal m r 
                         -> Env m r
-                        -> [String]
+                        -> [Text]
                         -> (Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r))
                         -> m (LispVal m r)
 makeHVarargs = makeHFunc . Just . showVal
@@ -611,12 +615,12 @@ validateFuncParams ps Nothing = do
   let syms = filter filterArgs ps
   if (length syms) /= (length ps)
      then throwError $ Default $ 
-             "Invalid lambda parameter(s): " ++ show (List ps)
+             "Invalid lambda parameter(s): " <> (T.pack . show) (List ps)
      else do
          let strs = DL.sort $ map (\ (Atom a) -> a) ps
          case dupe strs of
             Just d -> throwError $ Default $ 
-                         "Duplicate lambda parameter " ++ d
+                         "Duplicate lambda parameter " <> d
             _ -> return True
  where
   filterArgs (Atom _) = True

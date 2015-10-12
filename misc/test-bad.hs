@@ -27,7 +27,7 @@ getRTVar env var = do
   return $ case v of 
     List _ -> Pointer var env 
     DottedList _ _ -> Pointer var env 
-    String _ -> Pointer var env 
+    Text _ -> Pointer var env 
     Vector _ -> Pointer var env 
     ByteVector _ -> Pointer var env 
     HashTable _ -> Pointer var env 

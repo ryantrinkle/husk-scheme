@@ -1,4 +1,6 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE OverloadedStrings #-}
+
 {- |
 Module      : Language.Scheme.Compiler.Libraries
 Copyright   : Justin Ethier
@@ -24,6 +26,8 @@ import Language.Scheme.Primitives
 import Language.Scheme.Types
 import Language.Scheme.Variables
 import Control.Monad.Except
+import Data.Text
+import Data.Monoid
 
 -- |Import all given modules and generate code for them
 importAll 
@@ -53,7 +57,7 @@ importAll env metaEnv (m : ms) lopts
     stub <- case rest of 
         [] -> return [createFunctionStub nextFunc lastFunc]
         _ -> return []
-    return $ c ++ rest ++ stub
+    return $ c <> rest <> stub
 importAll _ _ [] _ _ = return []
 
 _importAll :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r)
@@ -105,8 +109,8 @@ importModule env metaEnv moduleName imports lopts
         -- But the source of /value/ is different depending on the
         -- context, so we call into this function to figure it out
         codeToGetFromEnv moduleName code,
-        AstValue $ "  _ <- evalLisp env $ List [Atom \"%import\", LispEnv env, value, List [Atom \"quote\", " ++ 
-                  (ast2Str $ List imports) ++ "], Bool False]",
+        AstValue $ "  _ <- evalLisp env $ List [Atom \"%import\", LispEnv env, value, List [Atom \"quote\", " <> 
+                  (ast2Str $ List imports) <> "], Bool False]",
         createAstCont (CompileOptions symImport False False lastFunc) "(value)" ""]
     
     -- thisFunc MUST be defined, so include a stub if there was nothing to import
@@ -115,7 +119,7 @@ importModule env metaEnv moduleName imports lopts
         _ -> return []
 
     return $ [createAstFunc (CompileOptions symImport True False lastFunc) 
-                             importFunc] ++ code ++ stub
+                             importFunc] <> code <> stub
  where 
   --
   -- The import's from env can come from many places; this function
@@ -136,9 +140,9 @@ importModule env metaEnv moduleName imports lopts
   codeToGetFromEnv name [] = do
      -- No code was generated because module was loaded previously, so retrieve
      -- it from runtime memory
-     AstValue $ "  value <- evalLisp env $ List [Atom \"hash-table-ref\", Atom \"" ++ 
-                moduleRuntimeVar ++ "\", List [Atom \"quote\", " ++ 
-               (ast2Str name) ++ "]]" 
+     AstValue $ "  value <- evalLisp env $ List [Atom \"hash-table-ref\", Atom \"" <> 
+                moduleRuntimeVar <> "\", List [Atom \"quote\", " <> 
+               (ast2Str name) <> "]]" 
 
   codeToGetFromEnv _ _ = AstValue $ ""
 
@@ -179,15 +183,15 @@ loadModule metaEnv name lopts copts@(CompileOptions {}) = do
 
                     newEnvFunc <- return $ [
                         AstValue $ "  newEnv <- lift $ nullEnvWithImport",
-                        AstValue $ "  _ <- defineVar newEnv \"" ++ moduleRuntimeVar ++ 
-                                       "\" $ Pointer \"" ++ moduleRuntimeVar ++ "\" env",
-                        AstValue $ "  _ <- " ++ symStartLoadNewEnv ++ 
+                        AstValue $ "  _ <- defineVar newEnv \"" <> moduleRuntimeVar <> 
+                                       "\" $ Pointer \"" <> moduleRuntimeVar <> "\" env",
+                        AstValue $ "  _ <- " <> symStartLoadNewEnv <> 
                                    " newEnv (makeNullContinuation newEnv) (LispEnv env) (Just [])",
                         -- Save loaded module into runtime memory in case
                         -- it gets included somewhere else later on
-                        AstValue $ "  _ <- evalLisp env $ List [Atom \"hash-table-set!\", Atom \"" ++ 
-                                   moduleRuntimeVar ++ "\", List [Atom \"quote\", " ++
-                                  (ast2Str name) ++ "], LispEnv newEnv]",
+                        AstValue $ "  _ <- evalLisp env $ List [Atom \"hash-table-set!\", Atom \"" <> 
+                                   moduleRuntimeVar <> "\", List [Atom \"quote\", " <>
+                                  (ast2Str name) <> "], LispEnv newEnv]",
                         createAstCont copts "(LispEnv newEnv)" ""]
                     
                     -- Create new env for module, per eval-module
@@ -201,9 +205,9 @@ loadModule metaEnv name lopts copts@(CompileOptions {}) = do
                     _ <- eval metaEnv $ List [Atom "add-module!", List [Atom "quote", name], modWEnv]
 
                     return $ 
-                     [createAstFunc copts newEnvFunc] ++
+                     [createAstFunc copts newEnvFunc] <>
                      [createAstFunc (CompileOptions symEndLoadNewEnv False False Nothing)
-                                    [AstValue "  return $ Nil \"\""]] ++
+                                    [AstValue "  return $ Nil \"\""]] <>
                      result
                 _ -> return [] --_mod
 
@@ -232,8 +236,8 @@ compileModule env metaEnv name _mod lopts
     moduleDirectives <- cmpModExpr env metaEnv name metaData lopts $
         moduleDirsCopts moduleImports afterImportsFnc
 
-    return $ moduleImports ++ 
-             moduleDirectives ++ 
+    return $ moduleImports <> 
+             moduleDirectives <> 
             (moduleStub moduleImports moduleDirectives afterImportsFnc)
  where 
   moduleDirsCopts modImps afterImportsFnc = do
@@ -256,7 +260,7 @@ compileModule env metaEnv name _mod lopts
 --
 -- TODO: ideally stubs would not be necessary,
 --       should refactor out at some point
-createFunctionStub :: String -> Maybe String -> HaskAST
+createFunctionStub :: Text -> Maybe Text -> HaskAST
 createFunctionStub thisFunc nextFunc = do
     createAstFunc (CompileOptions thisFunc True False Nothing)
                   [createAstCont (CompileOptions "" True False nextFunc) 
@@ -287,7 +291,7 @@ cmpSubMod env metaEnv (List ((List (Atom "import" : modules)) : ls)) lopts
     stub <- case rest of 
         [] -> return [createFunctionStub nextFunc lastFunc]
         _ -> return []
-    return $ code ++ rest ++ stub
+    return $ code <> rest <> stub
 cmpSubMod env metaEnv (List (_ : ls)) lopts copts = 
     cmpSubMod env metaEnv (List ls) lopts copts
 cmpSubMod _ _ _ _ (CompileOptions thisFunc _ _ lastFunc) = 
@@ -317,10 +321,10 @@ cmpModExpr env metaEnv name (List ((List (Atom "include" : files)) : ls))
     stub <- case rest of 
         [] -> return [createFunctionStub nextFunc lastFunc]
         _ -> return []
-    return $ code ++ rest ++ stub
+    return $ code <> rest <> stub
  where 
-  compileInc (String dir) (String filename) entry exit = do
-    let path = dir ++ filename
+  compileInc (Text dir) (Text filename) entry exit = do
+    let path = dir <> filename
     path' <- LSC.findFileOrLib path
     compileLisp env path' entry exit
   compileInc _ _ _ _ = throwError $ InternalError ""
@@ -345,7 +349,7 @@ cmpModExpr env metaEnv name
     stub <- case rest of 
         [] -> return [createFunctionStub nextFunc lastFunc]
         _ -> return []
-    return $ code ++ rest ++ stub
+    return $ code <> rest <> stub
 cmpModExpr env metaEnv name (List (_ : ls)) lopts copts = 
     cmpModExpr env metaEnv name (List ls) lopts copts
 cmpModExpr _ _ _ _ _ (CompileOptions thisFunc _ _ lastFunc) =
@@ -357,7 +361,7 @@ includeAll :: forall t t1 t2 t3 m r. MonadSerial m
            => t
            -> t3
            -> [t2]
-           -> (t3 -> t2 -> String -> Maybe String -> IOThrowsError m r [HaskAST])
+           -> (t3 -> t2 -> Text -> Maybe Text -> IOThrowsError m r [HaskAST])
            -> t1
            -> CompOpts
            -> IOThrowsError m r [HaskAST]
@@ -373,7 +377,7 @@ includeAll env dir (f : fs) include lopts
     stub <- case rest of 
         [] -> return [createFunctionStub nextFunc lastFunc]
         _ -> return []
-    return $ c ++ rest ++ stub
+    return $ c <> rest <> stub
 includeAll _ _ [] _ _ _ = return []
 
 -- |Like evalLisp, but preserve pointers in the output

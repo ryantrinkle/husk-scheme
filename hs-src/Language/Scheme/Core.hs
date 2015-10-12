@@ -3,6 +3,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 {- |
 Module      : Language.Scheme.Core
@@ -81,11 +82,15 @@ import Data.FileEmbed
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Control.Arrow (first)
+import Data.Text (Text)
+import qualified Data.Text as T
+import qualified Data.Text.IO as T
+import Data.Monoid
 -- import Debug.Trace
 
 -- |Husk version number
-version :: String
-version = DV.showVersion PHS.version
+version :: Text
+version = T.pack $ DV.showVersion PHS.version
 
 -- |A utility function to display the husk console banner
 showBanner :: IO ()
@@ -99,7 +104,7 @@ showBanner = do
   putStrLn "                                                                         "
   putStrLn " http://justinethier.github.io/husk-scheme                              "
   putStrLn " (c) 2010-2015 Justin Ethier                                             "
-  putStrLn $ " Version " ++ (DV.showVersion PHS.version) ++ " "
+  putStrLn $ " Version " <> (DV.showVersion PHS.version) <> " "
   putStrLn "                                                                         "
 
 getHuskFeatures :: Monad m => m [LispVal m r]
@@ -107,22 +112,22 @@ getHuskFeatures = do
     -- TODO: windows posix
     return [ Atom "r7rs"
            , Atom "husk"
-           , Atom $ "husk-" ++ (DV.showVersion PHS.version)
-           , Atom SysInfo.arch
-           , Atom SysInfo.os
+           , Atom $ "husk-" <> version
+           , Atom $ T.pack SysInfo.arch
+           , Atom $ T.pack SysInfo.os
            , Atom "full-unicode"
            , Atom "complex"
            , Atom "ratios"
            ]
 
 libFiles :: Map FilePath BS.ByteString
-libFiles = Map.fromList $ map (first ("/data/lib/" ++)) $(embedDir "lib")
+libFiles = Map.fromList $ map (first ("/data/lib/" <>)) $(embedDir "lib")
 
 -- Future use:
 -- getDataFileFullPath' :: [LispVal m r] -> IOThrowsError LispVal m r
--- getDataFileFullPath' [String s] = do
+-- getDataFileFullPath' [Text s] = do
 --     path <- liftIO $ PHS.getDataFileName s
---     return $ String path
+--     return $ Text path
 -- getDataFileFullPath' [] = throwError $ NumArgs (Just 1) []
 -- getDataFileFullPath' args = throwError $ TypeMismatch "string" $ List args
 
@@ -130,11 +135,11 @@ libFiles = Map.fromList $ map (first ("/data/lib/" ++)) $(embedDir "lib")
 --  libraries. If the file is not found in the current directory but exists
 --  as a husk library, return the full path to the file in the library.
 --  Otherwise just return the given filename.
-findFileOrLib :: (MonadFilesystem m, ReadRef r m, PtrEq m r) => String -> IOThrowsError m r String
+findFileOrLib :: (MonadFilesystem m, ReadRef r m, PtrEq m r) => Text -> IOThrowsError m r Text
 findFileOrLib filename = do
-    let fileAsLib = "/data/lib/" ++ filename
-    exists <- fileExists [String filename]
-    existsLib <- fileExists [String fileAsLib]
+    let fileAsLib = "/data/lib/" <> filename
+    exists <- fileExists [Text filename]
+    existsLib <- fileExists [Text fileAsLib]
     case (exists, existsLib) of
         (Bool False, Bool True) -> return fileAsLib
         _ -> return filename
@@ -143,10 +148,10 @@ libraryExists :: (MonadFilesystem m, ReadRef r m, PtrEq m r) => [LispVal m r] ->
 libraryExists [p@(Pointer _ _)] = do
     p' <- recDerefPtrs p
     libraryExists [p']
-libraryExists [(String filename)] = do
-    let fileAsLib = "/data/lib/" ++ filename
-    Bool exists <- fileExists [String filename]
-    Bool existsLib <- fileExists [String fileAsLib]
+libraryExists [(Text filename)] = do
+    let fileAsLib = "/data/lib/" <> filename
+    Bool exists <- fileExists [Text filename]
+    Bool existsLib <- fileExists [Text fileAsLib]
     return $ Bool $ exists || existsLib
 libraryExists _ = return $ Bool False
 
@@ -160,30 +165,29 @@ registerExtensions env getDataFileName = do
 -- |Register the given SRFI
 registerSRFI :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> (FilePath -> m FilePath) -> Integer -> m ()
 registerSRFI env getDataFileName num = do
- filename <- getDataFileName $ "lib/srfi/srfi-" ++ show num ++ ".scm"
- _ <- evalString env $ "(register-extension '(srfi " ++ show num ++ ") \"" ++ 
-  (escapeBackslashes filename) ++ "\")"
- return ()
+  filename <- getDataFileName $ "lib/srfi/srfi-" <> show num <> ".scm"
+  _ <- evalString env $ "(register-extension '(srfi " <> T.pack (show num) <> ") \"" <> escapeBackslashes (T.pack filename) <> "\")"
+  return ()
 
 -- TODO: good news is I think this can be completely implemented in husk, no changes necessary to third party code. the bad news is that this guy needs to be called from the runIOThrows* code instead of show which means that code needs to be relocated (maybe to this module, if that is appropriate (not sure it is)...
 
 -- |This is the recommended function to use to display a lisp error, instead
 --  of just using show directly.
-showLispError :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => LispError m r -> m String
+showLispError :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => LispError m r -> m Text
 showLispError (NumArgs n lvs) = do
   lvs' <- runExceptT $ mapM recDerefPtrs lvs
   case lvs' of
-    Left _ -> return $ show $ NumArgs n lvs
-    Right vals -> return $ show $ NumArgs n vals
+    Left _ -> return $ T.pack $ show $ NumArgs n lvs
+    Right vals -> return $ T.pack $ show $ NumArgs n vals
 showLispError (TypeMismatch str p@(Pointer _ e)) = do
   lv' <- evalLisp' e p 
   case lv' of
-    Left _ -> showLispError (TypeMismatch str $ Atom $ show p :: LispError m r)
+    Left _ -> showLispError (TypeMismatch str $ Atom $ T.pack $ show p :: LispError m r)
     Right val -> showLispError $ TypeMismatch str val
 showLispError (BadSpecialForm str p@(Pointer _ e)) = do
   lv' <- evalLisp' e p 
   case lv' of
-    Left _ -> showLispError (BadSpecialForm str $ Atom $ show p :: LispError m r)
+    Left _ -> showLispError (BadSpecialForm str $ Atom $ T.pack $ show p :: LispError m r)
     Right val -> showLispError $ BadSpecialForm str val
 showLispError (ErrorWithCallHist err hist) = do
   err' <- showLispError err
@@ -191,12 +195,12 @@ showLispError (ErrorWithCallHist err hist) = do
   case hist' of
     Left _ -> return $ showCallHistory err' hist
     Right vals -> return $ showCallHistory err' vals
-showLispError err = return $ show err
+showLispError err = return $ T.pack $ show err
 
 -- |Execute an IO action and return result or an error message.
 --  This is intended for use by a REPL, where a result is always
 --  needed regardless of type.
-runIOThrowsREPL :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => IOThrowsError m r String -> m String
+runIOThrowsREPL :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => IOThrowsError m r Text -> m Text
 runIOThrowsREPL action = do
     runState <- runExceptT action
     case runState of
@@ -204,7 +208,7 @@ runIOThrowsREPL action = do
         Right val -> return val
 
 -- |Execute an IO action and return error or Nothing if no error was thrown.
-runIOThrows :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => IOThrowsError m r String -> m (Maybe String)
+runIOThrows :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => IOThrowsError m r Text -> m (Maybe Text)
 runIOThrows action = do
     runState <- runExceptT action
     case runState of
@@ -228,13 +232,13 @@ evalString env "(* 3 9)"
 "27"
 @
 -}
-evalString :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> String -> m String
+evalString :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> Text -> m Text
 evalString env expr = do
-  runIOThrowsREPL $ liftM show $ liftThrows (readExpr expr) >>= evalLisp env
+  runIOThrowsREPL $ liftM (T.pack . show) $ liftThrows (readExpr expr) >>= evalLisp env
 
 -- |Evaluate a string and print results to console
-evalAndPrint :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> String -> m ()
-evalAndPrint env expr = evalString env expr >>= liftIO . putStrLn
+evalAndPrint :: (MonadIO m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> Text -> m ()
+evalAndPrint env expr = evalString env expr >>= liftIO . T.putStrLn
 
 -- |Evaluate a lisp data structure and return a value for use by husk
 evalLisp :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> LispVal m r -> IOThrowsError m r (LispVal m r)
@@ -248,7 +252,7 @@ evalLisp env lisp = do
 -- @
 --  result <- evalLisp' env $ List [Atom "/", Number 1, Number 0]
 --  case result of
---    Left err -> putStrLn $ "Error: " ++ (show err)
+--    Left err -> putStrLn $ "Error: " <> (show err)
 --    Right val -> putStrLn $ show val
 -- @
 evalLisp' :: (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> LispVal m r -> m (ThrowsError m r (LispVal m r))
@@ -331,7 +335,7 @@ continueEval _
  -       a function is loaded the first time, so there is no need to test for this again here.
  -}
 continueEval _ (Continuation cEnv (Just (SchemeBody cBody)) (Just cCont) dynWind callHist) val extraArgs = do
---    case (trace ("cBody = " ++ show cBody) cBody) of
+--    case (trace ("cBody = " <> show cBody) cBody) of
     case cBody of
         [] -> do
           case cCont of
@@ -372,7 +376,7 @@ NOTE:  This function does not include macro support and should not be called dir
 --
 eval :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => Env m r -> LispVal m r -> LispVal m r -> IOThrowsError m r (LispVal m r)
 eval env cont val@(Nil _) = continueEval env cont val Nothing
-eval env cont val@(String _) = continueEval env cont val Nothing
+eval env cont val@(Text _) = continueEval env cont val Nothing
 eval env cont val@(Char _) = continueEval env cont val Nothing
 eval env cont val@(Complex _) = continueEval env cont val Nothing
 eval env cont val@(Float _) = continueEval env cont val Nothing
@@ -392,7 +396,7 @@ eval env cont (Atom a) = do
 #ifdef UsePointers
               List _ -> Pointer a env
               DottedList _ _ -> Pointer a env
-              String _ -> Pointer a env
+              Text _ -> Pointer a env
               Vector _ -> Pointer a env
               ByteVector _ -> Pointer a env
               HashTable _ -> Pointer a env
@@ -573,7 +577,7 @@ eval env cont args@(List (Atom "define" : DottedList (Atom var : fparams) vararg
  if bound
   then prepareApply env cont args -- if is bound to a variable in this scope; call into it
   else do 
-      _ <- validateFuncParams (fparams ++ [varargs]) Nothing
+      _ <- validateFuncParams (fparams <> [varargs]) Nothing
       ebody <- mapM (\ lisp -> Language.Scheme.Macro.macroEval env lisp apply) fbody
       result <- lift (makeVarargs varargs env fparams ebody) >>= defineVar env var
       continueEval env cont result Nothing
@@ -593,7 +597,7 @@ eval env cont args@(List (Atom "lambda" : DottedList fparams varargs : fbody)) =
  if bound
   then prepareApply env cont args -- if is bound to a variable in this scope; call into it
   else do 
-      _ <- validateFuncParams (fparams ++ [varargs]) Nothing
+      _ <- validateFuncParams (fparams <> [varargs]) Nothing
       ebody <- mapM (\ lisp -> Language.Scheme.Macro.macroEval env lisp apply) fbody
       result <- lift $ makeVarargs varargs env fparams ebody
       continueEval env cont result Nothing
@@ -834,18 +838,18 @@ eval _ _ badForm = throwError $ BadSpecialForm "Unrecognized special form" badFo
 
 -- |A helper function for the special form /(string-set!)/
 substr :: Monad m => (LispVal m r, LispVal m r, LispVal m r) -> IOThrowsError m r (LispVal m r) 
-substr (String str, Char char, Number ii) = do
-                      return $ String $ (take (fromInteger ii) . drop 0) str ++
-                               [char] ++
-                               (take (length str) . drop (fromInteger ii + 1)) str
-substr (String _, Char _, n) = throwError $ TypeMismatch "number" n
-substr (String _, c, _) = throwError $ TypeMismatch "character" c
+substr (Text str, Char char, Number ii) = do
+                      return $ Text $ T.take (fromInteger ii) str <>
+                               T.singleton char <>
+                               T.drop (fromInteger ii + 1) str
+substr (Text _, Char _, n) = throwError $ TypeMismatch "number" n
+substr (Text _, c, _) = throwError $ TypeMismatch "character" c
 substr (s, _, _) = throwError $ TypeMismatch "string" s
 
 -- |Replace a list element, by index. Taken from:
 --  http://stackoverflow.com/questions/10133361/haskell-replace-element-in-list
 replaceAtIndex :: forall a. Int -> a -> [a] -> [a]
-replaceAtIndex n item ls = a ++ (item:b) where (a, (_:b)) = splitAt n ls
+replaceAtIndex n item ls = a <> (item:b) where (a, (_:b)) = splitAt n ls
 
 -- |A helper function for /(list-set!)/
 updateList :: ReadRef r m => LispVal m r -> LispVal m r -> LispVal m r -> IOThrowsError m r (LispVal m r)
@@ -880,7 +884,7 @@ updateByteVector v _ _ = throwError $ TypeMismatch "bytevector" v
 
 -- |Helper function to perform CPS for vector-set! and similar forms
 createObjSetCPS :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r)
-                => String
+                => Text
                 -> LispVal m r
                 -> (LispVal m r -> LispVal m r -> LispVal m r -> IOThrowsError m r (LispVal m r))
                 -> Env m r
@@ -917,11 +921,11 @@ prepareApply env (Continuation clo cc nc dw cstk) fnc@(List (function : function
  where
        cpsPrepArgs :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)
        cpsPrepArgs e c func args' = do
--- case (trace ("prep eval of args: " ++ show args) args) of
+-- case (trace ("prep eval of args: " <> show args) args) of
           let args = case args' of
                           Just as -> as
                           Nothing -> []
-          --case (trace ("stack: " ++ (show fnc) ++ " " ++ (show cstk)) args) of
+          --case (trace ("stack: " <> (show fnc) <> " " <> (show cstk)) args) of
           case args of
             [] -> apply c func [] -- No args, immediately apply the function
             [a] -> meval env (makeCPSWArgs e c cpsEvalArgs [func, List [], List []]) a
@@ -935,11 +939,11 @@ prepareApply env (Continuation clo cc nc dw cstk) fnc@(List (function : function
        cpsEvalArgs :: Env m r -> LispVal m r -> LispVal m r -> Maybe [LispVal m r] -> IOThrowsError m r (LispVal m r)
        cpsEvalArgs e c evaledArg (Just [func, List argsEvaled, List argsRemaining]) =
           case argsRemaining of
-            [] -> apply c func (argsEvaled ++ [evaledArg])
-            [a] -> meval e (makeCPSWArgs e c cpsEvalArgs [func, List (argsEvaled ++ [evaledArg]), List []]) a
-            (a : as) -> meval e (makeCPSWArgs e c cpsEvalArgs [func, List (argsEvaled ++ [evaledArg]), List as]) a
+            [] -> apply c func (argsEvaled <> [evaledArg])
+            [a] -> meval e (makeCPSWArgs e c cpsEvalArgs [func, List (argsEvaled <> [evaledArg]), List []]) a
+            (a : as) -> meval e (makeCPSWArgs e c cpsEvalArgs [func, List (argsEvaled <> [evaledArg]), List as]) a
 
-       cpsEvalArgs _ _ _ (Just a) = throwError $ Default $ "Unexpected error in function application (1) " ++ show a
+       cpsEvalArgs _ _ _ (Just a) = throwError $ Default $ "Unexpected error in function application (1) " <> T.pack (show a)
        cpsEvalArgs _ _ _ Nothing = throwError $ Default "Unexpected error in function application (2)"
 prepareApply _ _ _ = throwError $ Default "Unexpected error in prepareApply"
 
@@ -950,7 +954,7 @@ apply :: forall m r. (MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrE
       -> [LispVal m r] -- ^ Arguments
       -> IOThrowsError m r (LispVal m r) -- ^ Final value of computation
 apply _ cont@(Continuation env _ _ ndynwind _) args = do
--- case (trace ("calling into continuation. dynWind = " ++ show ndynwind) ndynwind) of
+-- case (trace ("calling into continuation. dynWind = " <> show ndynwind) ndynwind) of
   case ndynwind of
     -- Call into dynWind.before if it exists...
     Just [DynamicWinders beforeFunc _] -> apply (makeCPS env cont cpsApply) beforeFunc []
@@ -1021,7 +1025,7 @@ apply cont (Func aparams avarargs abody aclosure) args =
         evalBody evBody env = case cont of
             Continuation _ (Just (SchemeBody cBody)) (Just cCont) cDynWind cStack -> if null cBody
                 then continueWCont env evBody cCont cDynWind cStack
--- else continueWCont env (evBody) cont (trace ("cDynWind = " ++ show cDynWind) cDynWind) -- Might be a problem, not fully optimizing
+-- else continueWCont env (evBody) cont (trace ("cDynWind = " <> show cDynWind) cDynWind) -- Might be a problem, not fully optimizing
                 else continueWCont env evBody cont cDynWind cStack -- Might be a problem, not fully optimizing
             Continuation _ _ _ cDynWind cStack -> continueWCont env evBody cont cDynWind cStack
             _ -> continueWCont env evBody cont Nothing []
@@ -1122,18 +1126,18 @@ addR5rsEnv' env = do
   
   -- Load standard library
   features <- getHuskFeatures
-  _ <- evalString env $ "(define *features* '" ++ show (List features) ++ ")"
-  _ <- evalString env $ "(load \"" ++ (escapeBackslashes stdlib) ++ "\")" 
+  _ <- evalString env $ "(define *features* '" <> T.pack (show (List features)) <> ")"
+  _ <- evalString env $ "(load \"" <> (escapeBackslashes stdlib) <> "\")" 
 
   -- Load (require-extension), which can be used to load other SRFI's
-  _ <- evalString env $ "(load \"" ++ (escapeBackslashes srfi55) ++ "\")"
-  registerExtensions env $ return . ("/data/lib/" ++)
+  _ <- evalString env $ "(load \"" <> (escapeBackslashes srfi55) <> "\")"
+  registerExtensions env $ return . ("/data/lib/" <>)
 
 #ifdef UseLibraries
   -- Load module meta-language 
   let metalib = "/data/lib/modules.scm"
   metaEnv <- nullEnvWithParent env -- Load env as parent of metaenv
-  _ <- evalString metaEnv $ "(load \"" ++ (escapeBackslashes metalib) ++ "\")"
+  _ <- evalString metaEnv $ "(load \"" <> (escapeBackslashes metalib) <> "\")"
   -- Load meta-env so we can find it later
   _ <- evalLisp' env $ List [Atom "define", Atom "*meta-env*", LispEnv metaEnv]
   -- Load base primitives
@@ -1180,11 +1184,11 @@ addR7rsEnv' env = do
   -- Load necessary libraries
   -- Unfortunately this adds them in the top-level environment (!!)
   features <- getHuskFeatures
-  _ <- evalString env $ "(define *features* '" ++ show (List features) ++ ")"
+  _ <- evalString env $ "(define *features* '" <> T.pack (show (List features)) <> ")"
   let cxr = "/data/lib/cxr.scm"
-  _ <- evalString env {-baseEnv-} $ "(load \"" ++ (escapeBackslashes cxr) ++ "\")" 
+  _ <- evalString env {-baseEnv-} $ "(load \"" <> (escapeBackslashes cxr) <> "\")" 
   let core = "/data/lib/core.scm"
-  _ <- evalString env {-baseEnv-} $ "(load \"" ++ (escapeBackslashes core) ++ "\")" 
+  _ <- evalString env {-baseEnv-} $ "(load \"" <> (escapeBackslashes core) <> "\")" 
 
 -- TODO: probably will have to load some scheme libraries for modules.scm to work
 --  maybe the /base/ libraries from (scheme base) would be good enough?
@@ -1193,7 +1197,7 @@ addR7rsEnv' env = do
   -- Load module meta-language 
   let metalib = "/data/lib/modules.scm"
   metaEnv <- nullEnvWithParent env -- Load env as parent of metaenv
-  _ <- evalString metaEnv $ "(load \"" ++ (escapeBackslashes metalib) ++ "\")"
+  _ <- evalString metaEnv $ "(load \"" <> (escapeBackslashes metalib) <> "\")"
   -- Load meta-env so we can find it later
   _ <- evalLisp' env $ List [Atom "define", Atom "*meta-env*", LispEnv metaEnv]
   -- Load base primitives
@@ -1294,7 +1298,7 @@ evalfuncExit args@(cont : rest) = do
             apply (makeNullContinuation e) afterFunc []) 
          dynamicWinders
   execAfters _ = return []
-evalfuncExit args = throwError $ InternalError $ "Invalid arguments to exit: " ++ show args
+evalfuncExit args = throwError $ InternalError $ "Invalid arguments to exit: " <> T.pack (show args)
 
 evalfuncCallWValues [cont@(Continuation {contClosure = env}), producer, consumer] = do
   apply (makeCPS env cont cpsEval) producer [] -- Call into prod to get values
@@ -1316,7 +1320,7 @@ evalfuncApply (cont@(Continuation {}) : func : args) = do
   applyArgs aRev = do
     case aRev of
       List aLastElems -> do
-        apply cont func $ (init args) ++ aLastElems
+        apply cont func $ (init args) <> aLastElems
       Pointer _ _ -> do
         derefPtr aRev >>= applyArgs
       other -> throwError $ TypeMismatch "List" other
@@ -1407,10 +1411,10 @@ evalfuncLoad (cont : p@(Pointer _ _) : lvs) = do
     lv <- derefPtr p
     evalfuncLoad (cont : lv : lvs)
 
-evalfuncLoad [(Continuation _ a b c d), String filename, LispEnv env] = do
-    evalfuncLoad [Continuation env a b c d, String filename]
+evalfuncLoad [(Continuation _ a b c d), Text filename, LispEnv env] = do
+    evalfuncLoad [Continuation env a b c d, Text filename]
 
-evalfuncLoad [cont@(Continuation {contClosure = env}), String filename] = do
+evalfuncLoad [cont@(Continuation {contClosure = env}), Text filename] = do
     filename' <- findFileOrLib filename
     results <- load filename' >>= mapM (meval env (makeNullContinuation env))
     if not (null results)
@@ -1460,7 +1464,7 @@ evalfuncExitSuccess _ = do
   _ <- liftIO System.Exit.exitSuccess
   return $ Nil ""
 
-pureEvalFunctions :: (MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [(String, [LispVal m r] -> ExceptT (LispError m r) m (LispVal m r))]
+pureEvalFunctions :: (MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [(Text, [LispVal m r] -> ExceptT (LispError m r) m (LispVal m r))]
 pureEvalFunctions = [ ("apply", evalfuncApply)
                       , ("call-with-current-continuation", evalfuncCallCC)
                       , ("call-with-values", evalfuncCallWValues)
@@ -1485,8 +1489,8 @@ pureEvalFunctions = [ ("apply", evalfuncApply)
                     ]
 
 {- Primitive functions that extend the core evaluator -}
-evalFunctions :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [(String, [LispVal m r] -> ExceptT (LispError m r) m (LispVal m r))]
-evalFunctions = pureEvalFunctions ++ [ ("exit", evalfuncExit)
+evalFunctions :: (MonadIO m, MonadFilesystem m, MonadStdin m, MonadSerial m, ReadRef r m, WriteRef r m, NewRef r m, PtrEq m r) => [(Text, [LispVal m r] -> ExceptT (LispError m r) m (LispVal m r))]
+evalFunctions = pureEvalFunctions <> [ ("exit", evalfuncExit)
                                      , ("null-environment", evalfuncNullEnv)
                                      , ("exit-fail", evalfuncExitFail)
                                      , ("exit-success", evalfuncExitSuccess)
@@ -1502,4 +1506,4 @@ throwErrorWithCallHistory _ e = throwError e
 addToCallHistory :: LispVal m r -> [LispVal m r] -> [LispVal m r]
 addToCallHistory f history 
   | null history = [f]
-  | otherwise = (lastN' 9 history) ++ [f]
+  | otherwise = (lastN' 9 history) <> [f]
