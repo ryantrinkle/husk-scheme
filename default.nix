@@ -1,5 +1,5 @@
 { mkDerivation, array, base, bytestring, containers, directory
-, filepath, ghc-paths, haskeline, knob, mtl, parsec, process
+, filepath, ghc-paths, knob, mtl, parsec, process
 , stdenv, time, transformers, utf8-string, file-embed
 }:
 mkDerivation {
@@ -7,10 +7,10 @@ mkDerivation {
   version = "3.19.2";
   src = ./.;
   isLibrary = true;
-  isExecutable = true;
+  isExecutable = false;
   buildDepends = [
     array base bytestring containers directory filepath ghc-paths
-    haskeline knob mtl parsec process time transformers utf8-string
+    knob mtl parsec process time transformers utf8-string
     file-embed
   ];
   homepage = "http://justinethier.github.com/husk-scheme";
