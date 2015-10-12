@@ -78,69 +78,6 @@ ioPrimitives = [("open-input-file", makePort openFile ReadMode ),
                     String str -> hPutStr port str
                     _ -> hPutStr port $ show obj)),
 
-              ("string=?", strBoolBinop (==)),
-              ("string<?", strBoolBinop (<)),
-              ("string>?", strBoolBinop (>)),
-              ("string<=?", strBoolBinop (<=)),
-              ("string>=?", strBoolBinop (>=)),
-              ("string-ci=?", stringCIEquals),
-              ("string-ci<?", stringCIBoolBinop (<)),
-              ("string-ci>?", stringCIBoolBinop (>)),
-              ("string-ci<=?", stringCIBoolBinop (<=)),
-              ("string-ci>=?", stringCIBoolBinop (>=)),
-              ("string->symbol", string2Symbol),
-
-              ("car", car),
-              ("cdr", cdr),
-              ("cons", cons),
-
-              ("eq?",    eq),
-              ("eqv?",   eq), -- TODO: not quite right, but maybe good enough for now
-              ("equal?", recDerefToFnc equal),
-
-              ("pair?", isDottedList),
-              ("list?", unaryOp' isList),
-              ("vector?", unaryOp' isVector),
-              ("record?", unaryOp' isRecord),
-              ("null?", isNull),
-              ("string?", isString),
-
-              ("list-copy", listCopy),
-
-              ("string-length", stringLength),
-              ("string-ref", stringRef),
-              ("substring", substring),
-              ("string-append", stringAppend),
-              ("string->number", stringToNumber),
-              ("string->list", stringToList),
-              ("list->string", listToString),
-              ("string->vector", stringToVector),
-              ("vector->string", vectorToString),
-              ("string-copy", stringCopy),
-              ("string->utf8", byteVectorStr2Utf),
-
-              ("bytevector?", unaryOp' isByteVector),
-              ("bytevector-length", byteVectorLength),
-              ("bytevector-u8-ref", byteVectorRef),
-              ("bytevector-append", byteVectorAppend),
-              ("bytevector-copy", byteVectorCopy),
-              ("utf8->string", byteVectorUtf2Str),
-
-              ("vector-length",wrapLeadObj vectorLength),
-              ("vector-ref",   wrapLeadObj vectorRef),
-              ("vector-copy",  vectorCopy),
-              ("vector->list", wrapLeadObj vectorToList),
-              ("list->vector", wrapLeadObj listToVector),
-
-              ("hash-table?",       wrapHashTbl isHashTbl),
-              ("hash-table-exists?",wrapHashTbl hashTblExists),
-              ("hash-table-ref",    wrapHashTbl hashTblRef),
-              ("hash-table-size",   wrapHashTbl hashTblSize),
-              ("hash-table->alist", wrapHashTbl hashTbl2List),
-              ("hash-table-keys",   wrapHashTbl hashTblKeys),
-              ("hash-table-values", wrapHashTbl hashTblValues),
-              ("hash-table-copy",   wrapHashTbl hashTblCopy),
-
                 -- husk internal functions
                 --("husk-path", getDataFileFullPath'),
 
@@ -174,7 +111,70 @@ virtualIoPrimitives = [("gensym", gensym),
                        ("delete-file", deleteFile),
 
                        ("read-contents", readContents),
-                       ("read-all", readAll)
+                       ("read-all", readAll),
+
+                       ("string=?", strBoolBinop (==)),
+                       ("string<?", strBoolBinop (<)),
+                       ("string>?", strBoolBinop (>)),
+                       ("string<=?", strBoolBinop (<=)),
+                       ("string>=?", strBoolBinop (>=)),
+                       ("string-ci=?", stringCIEquals),
+                       ("string-ci<?", stringCIBoolBinop (<)),
+                       ("string-ci>?", stringCIBoolBinop (>)),
+                       ("string-ci<=?", stringCIBoolBinop (<=)),
+                       ("string-ci>=?", stringCIBoolBinop (>=)),
+                       ("string->symbol", string2Symbol),
+
+                       ("car", car),
+                       ("cdr", cdr),
+                       ("cons", cons),
+
+                       ("eq?",    eq),
+                       ("eqv?",   eq), -- TODO: not quite right, but maybe good enough for now
+                       ("equal?", recDerefToFnc equal),
+
+                       ("pair?", isDottedList),
+                       ("list?", unaryOp' isList),
+                       ("vector?", unaryOp' isVector),
+                       ("record?", unaryOp' isRecord),
+                       ("null?", isNull),
+                       ("string?", isString),
+
+                       ("list-copy", listCopy),
+
+                       ("string-length", stringLength),
+                       ("string-ref", stringRef),
+                       ("substring", substring),
+                       ("string-append", stringAppend),
+                       ("string->number", stringToNumber),
+                       ("string->list", stringToList),
+                       ("list->string", listToString),
+                       ("string->vector", stringToVector),
+                       ("vector->string", vectorToString),
+                       ("string-copy", stringCopy),
+                       ("string->utf8", byteVectorStr2Utf),
+
+                       ("bytevector?", unaryOp' isByteVector),
+                       ("bytevector-length", byteVectorLength),
+                       ("bytevector-u8-ref", byteVectorRef),
+                       ("bytevector-append", byteVectorAppend),
+                       ("bytevector-copy", byteVectorCopy),
+                       ("utf8->string", byteVectorUtf2Str),
+
+                       ("vector-length",wrapLeadObj vectorLength),
+                       ("vector-ref",   wrapLeadObj vectorRef),
+                       ("vector-copy",  vectorCopy),
+                       ("vector->list", wrapLeadObj vectorToList),
+                       ("list->vector", wrapLeadObj listToVector),
+
+                       ("hash-table?",       wrapHashTbl isHashTbl),
+                       ("hash-table-exists?",wrapHashTbl hashTblExists),
+                       ("hash-table-ref",    wrapHashTbl hashTblRef),
+                       ("hash-table-size",   wrapHashTbl hashTblSize),
+                       ("hash-table->alist", wrapHashTbl hashTbl2List),
+                       ("hash-table-keys",   wrapHashTbl hashTblKeys),
+                       ("hash-table-values", wrapHashTbl hashTblValues),
+                       ("hash-table-copy",   wrapHashTbl hashTblCopy)
                       ]
 
 -- | Pure primitive functions
